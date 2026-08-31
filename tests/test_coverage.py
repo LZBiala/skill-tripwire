@@ -25,3 +25,16 @@ def test_every_targeted_rule_in_the_corpus_exists() -> None:
     bad = [s["id"] for s in samples.build()
            if s["expect_rule"] is not None and s["expect_rule"] not in RULE_REGISTRY]
     assert not bad, "samples naming a rule that does not exist: " + ", ".join(bad)
+
+
+def test_finding_tier_and_owasp_match_the_registry() -> None:
+    # Binds the two copies of each rule's (tier, owasp): the one in the Finding a rule emits and
+    # the one in RULE_REGISTRY. Without this, editing a Finding's tier could silently change a
+    # verdict while every other gate stays green - the drift the constitution warns about.
+    from skill_tripwire.scan import scan
+    mismatches = []
+    for s in samples.build():
+        for f in scan(s["text"]).findings:
+            if f.rule_id in RULE_REGISTRY and (f.tier, f.owasp) != RULE_REGISTRY[f.rule_id]:
+                mismatches.append(f"{f.rule_id}: finding=({f.tier},{f.owasp}) registry={RULE_REGISTRY[f.rule_id]}")
+    assert not mismatches, "; ".join(sorted(set(mismatches)))

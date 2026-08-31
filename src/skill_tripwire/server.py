@@ -15,7 +15,7 @@ import sys
 from typing import Any
 
 from . import report
-from .scan import scan
+from .scan import MAX_INPUT_BYTES, scan
 
 TOOLS: list[dict[str, Any]] = [
     {
@@ -107,6 +107,10 @@ def serve() -> None:
     for line in sys.stdin:
         line = line.strip()
         if not line:
+            continue
+        # Reject an oversized request line before parsing it: the scan cap protects the
+        # algorithm, but a single huge JSON line would otherwise be parsed in full first.
+        if len(line) > MAX_INPUT_BYTES:
             continue
         try:
             msg = json.loads(line)

@@ -9,9 +9,9 @@ headline - precision recomputed at the ~2% base rate the field measures.
 
 ## Detection on the self-authored corpus (NOT a generalization number)
 
-- on samples the rules were built against: 7/7 = 100.0%. This is an upper bound and nothing more.
-- on the author's own limit-probe set (written knowing the rules, each sample pre-labeled a designed catch or a designed miss): 3/8 = 37.5%.
-- probes that miss, kept on the scorecard (each a real, named limit): ho-homoglyph-curl, ho-semantic-exfil-nourl, ho-capability-webfetch-drift, ho-structural-exfil, ho-cross-tool-shadow
+- on samples the rules were built against: 16/16 = 100.0%. This is an upper bound and nothing more.
+- on the author's own limit-probe set (written knowing the rules, each sample pre-labeled a designed catch or a designed miss): 3/11 = 27.3%.
+- probes that miss, kept on the scorecard (each a real, named limit): ho-homoglyph-curl, ho-semantic-exfil-nourl, ho-capability-webfetch-drift, ho-structural-exfil, ho-dns-env-exfil, ho-separated-hex, ho-html-comment-conceal, ho-cross-tool-shadow
 
 Read that second line as a demonstration, not a measurement. The catches show the
 canonicalize-and-decode pipeline defeats obfuscation; the misses document limits
@@ -26,13 +26,13 @@ yet computed. It is the top open item, and no home-made proxy is printed in its*
 
 ## False positives (all benign samples, several chosen as probes)
 
-- false positives: 0/18, so FPR <= 16.7% (rule of three)
+- false positives: 0/23, so FPR <= 13.0% (rule of three)
 - benign probes included: IMPORTANT phrasing, a narrow Bash grant, a matching WebFetch grant, a UUID, a credentials path, a benign base64 blob, a curl mention
 
 ## Precision at the measured ~2% marketplace base rate
 
-- using the limit-probe recall and the FPR bound: 4.4%
-- using the tuned upper-bound recall: 10.9%
+- using the limit-probe recall and the FPR bound: 4.1%
+- using the tuned upper-bound recall: 13.5%
 (Both use self-authored recall, so read them as illustrations of the base-rate
 effect, not as field precision.)
 
@@ -46,13 +46,13 @@ wild. FPR, not recall, is the number that decides whether anyone trusts the alar
 
 | rule | tier | owasp | recall on its targets | precision when it fires | flagged benign |
 |---|---|---|---|---|---:|
-| invisible-codepoints | block | ASI:hidden-instructions | 1/1 = 100.0% | 2/2 = 100.0% | 0 |
-| download-and-execute | block | ASI:code-execution | 3/4 = 75.0% | 3/3 = 100.0% | 0 |
+| invisible-codepoints | block | ASI:hidden-instructions | 2/2 = 100.0% | 3/3 = 100.0% | 0 |
+| download-and-execute | block | ASI:code-execution | 9/10 = 90.0% | 9/9 = 100.0% | 0 |
 | pre-execution-shell | block | ASI:code-execution | 1/1 = 100.0% | 1/1 = 100.0% | 0 |
-| broad-shell-capability | block | ASI:excessive-capability | 1/2 = 50.0% | 1/1 = 100.0% | 0 |
-| exfiltration | block | ASI:data-exfiltration | 1/3 = 33.3% | 1/1 = 100.0% | 0 |
+| broad-shell-capability | block | ASI:excessive-capability | 2/3 = 66.7% | 2/2 = 100.0% | 0 |
+| exfiltration | block | ASI:data-exfiltration | 2/4 = 50.0% | 2/2 = 100.0% | 0 |
 | imperative-to-agent | warn | ASI:social-engineering | 2/2 = 100.0% | 2/2 = 100.0% | 0 |
-| high-entropy-blob | warn | ASI:obfuscation | 1/1 = 100.0% | 2/2 = 100.0% | 0 |
+| high-entropy-blob | warn | ASI:obfuscation | 1/1 = 100.0% | 3/3 = 100.0% | 0 |
 
 Per-rule precision is 100% on this corpus only because no benign sample triggers
 any rule here; on a wild benign set the noisy warn-tier rules would drop it, which

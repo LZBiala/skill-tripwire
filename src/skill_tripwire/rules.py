@@ -57,25 +57,48 @@ def _rule_invisible_codepoints(canon: CanonResult, surface: str) -> list[Finding
     sample = canon.invisibles[0]
     return [Finding(
         "invisible-codepoints", "block", "ASI:hidden-instructions",
-        f"{len(canon.invisibles)} invisible codepoint(s) ({', '.join(classes)}) - "
+        f"{canon.invisible_count} invisible codepoint(s) ({', '.join(classes)}) - "
         "these render as nothing to a human but are read by the model.",
-        _defang(f"{sample.name} at offset {sample.offset}"),
-        f"offset {sample.offset}",
+        _defang(f"{sample.name} at canonical offset {sample.offset}"),
+        f"canonical offset {sample.offset}",
     )]
 
 
 _EXEC = re.compile(
     r"""(?ix)
-    (?:
-        curl|wget|iwr|invoke-webrequest
-    )
-    [^\n`]{0,200}?
-    \|\s*
-    (?:bash|sh|zsh|iex|invoke-expression|python\d?)     # ... piped into a shell
+    # 1) a web fetch piped into a shell (curl|bash and the PowerShell fetch family)
+    (?: curl|wget|iwr|invoke-webrequest|irm|invoke-restmethod )
+    [^\n`]{0,200}? \| \s*
+    (?: bash|sh|zsh|iex|invoke-expression|python\d? )
     |
-    (?:base64\s+-d|xxd\s+-r|openssl\s+enc)[^\n`]{0,60}?\|\s*(?:bash|sh|python\d?)
+    # 2) a decode piped into a shell
+    (?: base64\s+-d|xxd\s+-r|openssl\s+enc ) [^\n`]{0,60}? \| \s* (?: bash|sh|python\d? )
     |
-    (?:iwr|invoke-webrequest|curl|wget)[^\n`]{0,200}?\|\s*iex
+    # 3) functional Invoke-Expression wrapped around a web fetch (iex(irm ...), iex (iwr ...),
+    #    IEX (New-Object ...).DownloadString(...)) - the no-pipe PowerShell cradle
+    (?: iex|invoke-expression ) \s* \(? \s*
+    (?: iwr|irm|invoke-\w+|curl|wget|new-object [^\n`]{0,60}? downloadstring )
+    |
+    # 4) a web fetch feeding iex in the other order
+    (?: iwr|irm|invoke-webrequest|invoke-restmethod|curl|wget ) [^\n`]{0,200}? \| \s* iex
+    |
+    # 5) process or command substitution executed by a shell (source <(curl ...), bash <(...))
+    (?: source|\.|bash|sh|zsh ) \s+ <\( \s* (?: curl|wget|iwr|irm )
+    |
+    # 6) eval of a command substitution that fetches (eval "$(curl ...)", eval `wget ...`)
+    eval \s+ ["']? [$`] \(? [^\n`]{0,120}? (?: curl|wget|iwr|irm )
+    |
+    # 7) staged fetch to disk then run it (curl -o x && bash x, iwr -OutFile p ; ./p)
+    (?: curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod )
+    [^\n`]{0,150}? (?: -o|-O|-outfile )\b [^\n`]{0,80}? (?: &&|;|\|\| ) [^\n`]{0,60}?
+    (?: bash|sh|zsh|python\d?|node|source|iex|\./|\.\\ )
+    |
+    # 8) a Python interpreter running fetched code inline (python -c ... urlopen ... exec)
+    python\d? \s+ -c\b [^\n`]{0,200}? (?: urlopen|urllib|requests|socket|http )
+    [^\n`]{0,120}? (?: exec|eval|system|popen )
+    |
+    # 9) a Node interpreter running fetched code inline (node -e ... fetch ... eval)
+    node \s+ -e\b [^\n`]{0,200}? fetch [^\n`]{0,120}? (?: eval|exec|function )
     """,
 )
 
@@ -106,34 +129,68 @@ def _rule_pre_execution_shell(canon: CanonResult, surface: str) -> list[Finding]
     )]
 
 
-_ALLOWED_TOOLS = re.compile(r"(?im)^allowed-tools\s*:\s*(.+)$")
-_BROAD_SHELL = re.compile(r"(?i)\b(?:bash|shell|exec|execute|run_command|terminal)\b\s*(?:\(\s*\*?\s*\)|\*|:\s*\*)?")
-_WILDCARD_SHELL = re.compile(r"(?i)\b(?:bash|shell|exec)\s*\(\s*\*\s*\)")
+# Scope the capability scan to the first fenced front-matter block when one exists, so prose
+# that merely mentions "allowed-tools: Bash" does not trigger a false quarantine. When there is
+# no front matter (a bare config), fall back to the whole text so coverage still fails closed.
+_FRONTMATTER = re.compile(r"(?s)\A\s*---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)")
+_ALLOWED_TOOLS = re.compile(r"(?im)^allowed-tools[ \t]*:[ \t]*(.*)$")
+_LIST_ITEM = re.compile(r"^[ \t]*-[ \t]*(.+?)[ \t]*$")
+# A shell-granting tool token, optionally followed by its (scope). A token with no scope is a
+# full shell grant; a scope of () or (*) is a wildcard grant; a scope like (git diff) is narrow.
+_SHELL_TOKEN = re.compile(r"(?i)\b(bash|shell|exec|execute|terminal|run_command)\b([ \t]*\([^)]*\))?")
+
+
+def _grant_text(text: str, m: re.Match) -> str:
+    """The granted tools: the same-line value, or the following indented list if that is empty."""
+    same = m.group(1).strip()
+    if same:
+        return same
+    items = []
+    for line in text[m.end():].splitlines():
+        li = _LIST_ITEM.match(line)
+        if li:
+            items.append(li.group(1))
+        elif line.strip() == "":
+            continue
+        else:
+            break
+    return ", ".join(items)
 
 
 def _rule_broad_shell_capability(canon: CanonResult, surface: str) -> list[Finding]:
-    m = _ALLOWED_TOOLS.search(canon.text)
-    if not m:
-        return []
-    grant = m.group(1)
-    if _WILDCARD_SHELL.search(grant) or re.search(r"(?i)\b(?:bash|shell|exec)\b\s*\*", grant):
-        return [Finding(
-            "broad-shell-capability", "block", "ASI:excessive-capability",
-            "The skill grants unrestricted shell access. A narrow skill has no reason to.",
-            _defang(f"allowed-tools: {grant}"), f"front matter, canonical offset {m.start()}",
-        )]
+    fm = _FRONTMATTER.match(canon.text)
+    scope_text = fm.group(1) if fm else canon.text
+    # Iterate EVERY allowed-tools key, not just the first: a benign 'allowed-tools: Read' line
+    # must not shadow a later 'allowed-tools: Bash(*)'.
+    for m in _ALLOWED_TOOLS.finditer(scope_text):
+        grant = _grant_text(scope_text, m)
+        for tm in _SHELL_TOKEN.finditer(grant):
+            scope = tm.group(2)
+            inner = scope.strip()[1:-1].strip() if scope else None
+            broad = inner is None or inner in ("", "*")  # bare token, or (), or (*)
+            if broad:
+                return [Finding(
+                    "broad-shell-capability", "block", "ASI:excessive-capability",
+                    "The skill grants unrestricted shell access. A narrow skill has no reason to.",
+                    _defang(f"allowed-tools: {grant}"), "front matter",
+                )]
     return []
 
 
+_SECRET = r"(?:~/\.\w+|/etc/\w+|\bid_rsa\b|\btoken\b|\bsecret\b|\bkey\b|\benv\b|credentials)"
 _EXFIL = re.compile(
     r"""(?ix)
+    # read a secret, then send it to an http(s) URL
     (?:read|cat|contents?\s+of|send|post|upload|exfiltrate|leak)
-    [^\n]{0,120}?
-    (?:~/\.\w+|/etc/\w+|\bid_rsa\b|\btoken\b|\bsecret\b|\bkey\b|\benv\b)
-    [^\n]{0,120}?
-    https?://[^\s`)]+
+    [^\n]{0,120}? """ + _SECRET + r""" [^\n]{0,120}? https?://[^\s`)]+
     |
+    # send/post/upload ... to an http(s) URL
     (?:send|post|upload|exfiltrate)[^\n]{0,60}?\bto\b[^\n]{0,20}?https?://[^\s`)]+
+    |
+    # read a secret, then send it to an email address (gated on the secret so a plain "email
+    # the report to team@x" stays clean)
+    (?:read|cat|contents?\s+of|send|post|upload|email|exfiltrate|leak)
+    [^\n]{0,120}? """ + _SECRET + r""" [^\n]{0,120}? [\w.+\-]+@[\w.\-]+\.\w+
     """,
 )
 

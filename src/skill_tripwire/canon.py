@@ -43,6 +43,12 @@ class Decoding:
     depth: int
 
 
+# The recorded invisibles list is capped so a file of pure invisibles cannot build millions of
+# objects; the true total is kept as an integer, so the "{n} invisible codepoint(s)" message
+# stays accurate without an unbounded list.
+_MAX_RECORDED_INVISIBLES = 128
+
+
 @dataclass(frozen=True)
 class CanonResult:
     original: str
@@ -50,6 +56,7 @@ class CanonResult:
     invisibles: tuple[Invisible, ...]
     decodings: tuple[Decoding, ...]
     scan_text: str
+    invisible_count: int = 0
 
 
 def _classify(cp: int) -> str | None:
@@ -60,6 +67,11 @@ def _classify(cp: int) -> str | None:
         return "bidi"
     if cp in _ZERO_WIDTH:
         return "zero_width"
+    # Variation selectors render as nothing and are an established covert channel ("emoji
+    # invisible ink"). Scoped to the two VS blocks so real combining accents (cafe, resume) are
+    # untouched.
+    if 0xFE00 <= cp <= 0xFE0F or 0xE0100 <= cp <= 0xE01EF:
+        return "variation_selector"
     ch = chr(cp)
     # Tab, newline, carriage return are control characters but are ordinary in a text file.
     if ch in "\t\n\r":
@@ -71,23 +83,28 @@ def _classify(cp: int) -> str | None:
     return None
 
 
-def _strip_invisibles(text: str) -> tuple[str, tuple[Invisible, ...]]:
+def _strip_invisibles(text: str) -> tuple[str, tuple[Invisible, ...], int]:
     kept: list[str] = []
     found: list[Invisible] = []
+    total = 0
     for offset, ch in enumerate(text):
         cat = _classify(ord(ch))
         if cat is None:
             kept.append(ch)
             continue
-        try:
-            name = unicodedata.name(ch)
-        except ValueError:
-            name = f"U+{ord(ch):04X}"
-        found.append(Invisible(ord(ch), name, offset, cat))
-    return "".join(kept), tuple(found)
+        total += 1
+        if len(found) < _MAX_RECORDED_INVISIBLES:
+            try:
+                name = unicodedata.name(ch)
+            except ValueError:
+                name = f"U+{ord(ch):04X}"
+            found.append(Invisible(ord(ch), name, offset, cat))
+    return "".join(kept), tuple(found), total
 
 
-_B64_RUN = re.compile(r"[A-Za-z0-9+/]{16,}={0,2}")
+# Both base64 alphabets: standard (+ /) and url-safe (- _). An attacker who picks
+# urlsafe_b64encode must not thereby skip the decode step that exposes the payload.
+_B64_RUN = re.compile(r"[A-Za-z0-9+/\-_]{16,}={0,2}")
 _HEX_RUN = re.compile(r"(?:[0-9A-Fa-f]{2}){8,}")
 
 
@@ -110,11 +127,15 @@ def _decode_blobs(text: str, depth: int, max_depth: int) -> list[Decoding]:
         return out
     for m in _B64_RUN.finditer(text):
         raw = m.group(0)
-        if len(raw) % 4:
-            continue
-        try:
-            decoded = base64.b64decode(raw, validate=True).decode("utf-8", "replace")
-        except (binascii.Error, ValueError):
+        padded = raw + "=" * (-len(raw) % 4)  # tolerate unpadded blobs
+        decoded = None
+        for decoder in (base64.b64decode, base64.urlsafe_b64decode):
+            try:
+                decoded = decoder(padded).decode("utf-8", "replace")
+                break
+            except (binascii.Error, ValueError):
+                continue
+        if decoded is None:
             continue
         if _printable_ratio(decoded) >= 0.9 and decoded.strip():
             out.append(Decoding("base64", m.span(), decoded, depth))
@@ -138,8 +159,10 @@ def canonicalize(text: str, *, max_decode_depth: int = 2) -> CanonResult:
     # read as an attack. The same codepoint anywhere else stays suspicious and is inventoried.
     if text[:1] == chr(0xFEFF):
         text = text[1:]
+    # A direct library caller cannot request unbounded decode recursion; clamp to a hard ceiling.
+    max_decode_depth = min(max_decode_depth, 8)
     normalized = unicodedata.normalize("NFKC", text)
-    cleaned, invisibles = _strip_invisibles(normalized)
+    cleaned, invisibles, invisible_count = _strip_invisibles(normalized)
     decodings = tuple(_decode_blobs(cleaned, 1, max_decode_depth))
     if decodings:
         scan_text = cleaned + "\n" + "\n".join(d.decoded for d in decodings)
@@ -151,4 +174,5 @@ def canonicalize(text: str, *, max_decode_depth: int = 2) -> CanonResult:
         invisibles=invisibles,
         decodings=decodings,
         scan_text=scan_text,
+        invisible_count=invisible_count,
     )

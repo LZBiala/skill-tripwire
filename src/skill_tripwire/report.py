@@ -1,12 +1,14 @@
 """Turn a ScanResult into the two shapes callers need: a JSON object and a human summary."""
 from __future__ import annotations
 
+from typing import Any
+
 from .scan import ScanResult
 
 EXIT_CODE = {"PASS": 0, "REVIEW": 1, "QUARANTINE": 2}
 
 
-def to_dict(result: ScanResult) -> dict:
+def to_dict(result: ScanResult) -> dict[str, Any]:
     return {
         "verdict": result.verdict,
         "surface": result.surface,

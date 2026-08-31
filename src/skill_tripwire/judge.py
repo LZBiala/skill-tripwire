@@ -21,7 +21,7 @@ from typing import Callable
 
 from .canon import canonicalize
 from .rules import Finding
-from .scan import ScanResult, _ORDER, _verdict_of
+from .scan import ScanResult, _verdict_of
 
 ModelFn = Callable[[str], str]
 
@@ -76,7 +76,7 @@ def review(result: ScanResult, model_fn: ModelFn | None = None, enabled: bool = 
             verdict, "semantic judge",
         )
         findings = result.findings + (flag,)
-        return ScanResult(_verdict_of(list(findings)), findings, result.surface, result.canon)
+        return ScanResult(_verdict_of(findings), findings, result.surface, result.canon)
 
     # QUARANTINE stays QUARANTINE (judge cannot clear); an existing REVIEW stays REVIEW.
     return result

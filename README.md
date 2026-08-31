@@ -183,8 +183,10 @@ stays keyless.
 - **No rug-pull detection yet.** A tool description can pass a scan and then mutate after you
   approve it. Pin-and-diff hashing is deterministic and fits this project; it is the planned
   v1.1.
-- **No confusable-skeleton, no dataflow analysis, no unbounded decode.** The held-out misses in
-  the report name each of these limits with a sample. They are honest gaps, not hidden ones.
+- **No confusable-skeleton, no dataflow analysis, no inline-interpreter or HTML-comment rule.**
+  The held-out misses in the report name each of these limits with a sample. They are honest
+  gaps, not hidden ones. (Input is size-capped and decode depth is bounded, so "no unbounded
+  decode" is literally true, not aspirational.)
 
 ## Gates
 
