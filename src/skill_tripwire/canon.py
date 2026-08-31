@@ -83,6 +83,34 @@ def _classify(cp: int) -> str | None:
     return None
 
 
+_ZWJ = 0x200D
+
+
+def _is_benign_emoji_format(text: str, offset: int, cat: str) -> bool:
+    """True when an invisible codepoint is legitimate emoji formatting, not the covert channel.
+
+    Emoji genuinely use two of the codepoints this scanner strips: a variation selector (U+FE0F)
+    to force emoji presentation, and ZWJ (U+200D) to join emoji into one glyph. Flagging every
+    emoji-bearing config file as a hidden-instruction attack would be unusable. The attack forms
+    are still caught: a RUN of variation selectors ("invisible ink"), a selector with no base,
+    and a ZWJ that splits ordinary WORD characters ("ig<zwj>nore") rather than joining emoji.
+    """
+    prev = text[offset - 1] if offset > 0 else ""
+    nxt = text[offset + 1] if offset + 1 < len(text) else ""
+    if cat == "variation_selector":
+        prev_visible_base = bool(prev) and _classify(ord(prev)) is None and not prev.isspace()
+        neighbour_is_selector = (
+            (bool(prev) and _classify(ord(prev)) == "variation_selector")
+            or (bool(nxt) and _classify(ord(nxt)) == "variation_selector")
+        )
+        return prev_visible_base and not neighbour_is_selector
+    if ord(text[offset]) == _ZWJ:
+        # Joining two non-word characters (emoji/symbols) is a sequence; splitting letters or
+        # digits is the word-hiding attack.
+        return bool(prev) and bool(nxt) and not prev.isalnum() and not nxt.isalnum()
+    return False
+
+
 def _strip_invisibles(text: str) -> tuple[str, tuple[Invisible, ...], int]:
     kept: list[str] = []
     found: list[Invisible] = []
@@ -92,6 +120,8 @@ def _strip_invisibles(text: str) -> tuple[str, tuple[Invisible, ...], int]:
         if cat is None:
             kept.append(ch)
             continue
+        if _is_benign_emoji_format(text, offset, cat):
+            continue  # drop the emoji formatting mark, but do not record it as an attack
         total += 1
         if len(found) < _MAX_RECORDED_INVISIBLES:
             try:
@@ -159,6 +189,10 @@ def canonicalize(text: str, *, max_decode_depth: int = 2) -> CanonResult:
     # read as an attack. The same codepoint anywhere else stays suspicious and is inventoried.
     if text[:1] == chr(0xFEFF):
         text = text[1:]
+    # Normalize line endings so every line-anchored rule (front-matter scoping, allowed-tools)
+    # behaves the same whether a client sends LF or CRLF. A Windows agent's CRLF must not
+    # silently defeat front-matter scoping and fall back to a whole-text scan.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     # A direct library caller cannot request unbounded decode recursion; clamp to a hard ceiling.
     max_decode_depth = min(max_decode_depth, 8)
     normalized = unicodedata.normalize("NFKC", text)

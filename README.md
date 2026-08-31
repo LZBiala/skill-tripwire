@@ -67,9 +67,9 @@ skill-tripwire scan ./pptx-helper/SKILL.md
 
 ```
 verdict: QUARANTINE  (skill)
-  [BLOCK] invisible-codepoints (ASI:hidden-instructions) - offset 512
+  [BLOCK] invisible-codepoints (ASI:hidden-instructions) - canonical offset 512
       41 invisible codepoint(s) (tag) - these render as nothing to a human but are read by the model.
-      evidence: TAG LATIN SMALL LETTER E at offset 512
+      evidence: TAG LATIN SMALL LETTER E at canonical offset 512
 ```
 
 The exit code encodes the verdict (PASS 0, REVIEW 1, QUARANTINE 2), so it drops into a

@@ -84,7 +84,8 @@ def test_the_repo_ships_no_raw_invisible_bytes() -> None:  # BLOCKS - we do not 
         body = f.read_text(encoding="utf-8", errors="ignore")
         for c in body:
             cp = ord(c)
-            if cp in _DANGEROUS_CP or 0xE0000 <= cp <= 0xE007F:
+            if (cp in _DANGEROUS_CP or 0xE0000 <= cp <= 0xE007F
+                    or 0xFE00 <= cp <= 0xFE0F or 0xE0100 <= cp <= 0xE01EF):
                 offenders.append(f"{f.relative_to(ROOT)}: U+{cp:04X}")
                 break
     assert not offenders, "raw invisible codepoints in the repo: " + "; ".join(offenders)
