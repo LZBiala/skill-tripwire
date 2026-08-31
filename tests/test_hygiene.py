@@ -123,6 +123,23 @@ def test_no_third_party_imports_in_core() -> None:
     assert not hits, "unexpected import: " + "; ".join(hits)
 
 
+def test_readme_scan_examples_reference_files_that_exist() -> None:
+    # The headline command must be reproducible: a scan example that names a concrete repo file
+    # (examples/, corpus/, ./ ...) must point at a file that exists. Illustrative bare names
+    # like "skills/" or "CLAUDE.md" are not repo claims and are skipped.
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    claims = []
+    for m in re.finditer(r"scan\s+([^\n`]+)", readme):
+        for tok in m.group(1).split():
+            if tok.startswith("--"):
+                continue
+            if tok.startswith(("examples/", "corpus/", "tests/", "src/", "docs/", "./")):
+                claims.append(tok.rstrip(".,);"))
+    missing = [c for c in claims if not (ROOT / c).exists()]
+    assert not missing, "README scan examples name files that do not exist: " + ", ".join(missing)
+    assert claims, "expected at least one concrete, reproducible scan example in the README"
+
+
 def test_the_eval_report_regenerates_byte_identical() -> None:  # drift gate
     committed = ROOT / "eval" / "REPORT.md"
     assert committed.exists(), "run: python eval/run_eval.py --write"

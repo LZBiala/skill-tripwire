@@ -293,6 +293,9 @@ def _rule_high_entropy_blob(canon: CanonResult, surface: str) -> list[Finding]:
             continue
         if _JWT.match(token) or _SRI.match(token):
             continue
+        if "://" in token:
+            continue  # a URL is structured text, not the opaque blob this warn targets; a
+            # malicious URL is still caught by the block-tier download-and-execute / exfil rules
         if any(s <= m.start() < e for s, e in decoded_spans):
             continue
         return [Finding(

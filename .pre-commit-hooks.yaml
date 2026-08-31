@@ -1,0 +1,8 @@
+- id: skill-tripwire
+  name: skill-tripwire
+  description: Scan agent skill and config files for the shapes of poisoned instructions
+  entry: skill-tripwire scan
+  language: python
+  # Only the files an agent actually loads. Add or narrow this in your own .pre-commit-config.
+  files: '(^|/)(SKILL\.md|CLAUDE\.md|AGENTS\.md)$|\.mcp\.json$'
+  pass_filenames: true

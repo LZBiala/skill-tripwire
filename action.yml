@@ -1,0 +1,23 @@
+name: skill-tripwire
+description: Scan agent skill and config files for the shapes of poisoned instructions, fail-closed.
+branding:
+  icon: shield
+  color: purple
+inputs:
+  paths:
+    description: Files or directories to scan (space-separated).
+    required: false
+    default: "."
+  fail-on:
+    description: Exit-code gate threshold - review or quarantine.
+    required: false
+    default: quarantine
+runs:
+  using: composite
+  steps:
+    - name: Install skill-tripwire
+      shell: bash
+      run: python -m pip install "${{ github.action_path }}"
+    - name: Scan
+      shell: bash
+      run: skill-tripwire scan --fail-on "${{ inputs.fail-on }}" ${{ inputs.paths }}

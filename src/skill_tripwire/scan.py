@@ -62,6 +62,17 @@ def scan(content: str, surface: str = "skill") -> ScanResult:
 
 def scan_file(path: str | Path, surface: str = "skill") -> ScanResult:
     p = Path(path)
+    if p.is_dir():
+        # Honest diagnosis: a directory is not an unreadable file. Point the user at batch mode
+        # rather than letting the message blame a UTF-8 decode failure.
+        return ScanResult(
+            "QUARANTINE",
+            (Finding("is-a-directory", "block", "ASI:obfuscation",
+                     f"{p.name!r} is a directory, not a file. Scan the files inside it, or pass "
+                     "the directory to the CLI, which walks it for skill and config files.",
+                     p.name, str(p)),),
+            surface, None,
+        )
     try:
         size = p.stat().st_size
     except OSError as exc:

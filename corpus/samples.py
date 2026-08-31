@@ -247,6 +247,13 @@ def build() -> list[dict]:
              "https://models.example.com/model.bin && python run_inference.py",
         expect_verdict="PASS", expect_rule=None, owasp="ASI:code-execution",
         provenance="FP probe: download data then run a local, checked-in script (not the download)")
+    add(id="clean-markdown-badge", surface="skill", malicious=False,
+        text="# CI Status\n"
+             "![build](https://example.com/badges/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0.svg) "
+             "see https://example.com/docs/getting-started-with-the-formatter-plugin for setup.",
+        expect_verdict="PASS", expect_rule=None, owasp="ASI:obfuscation",
+        provenance="FP probe: long high-entropy URLs (a CI badge, a docs link) are structured "
+                   "text, not opaque blobs; the tool's own target files carry these")
     add(id="clean-jwt", surface="agent-config", malicious=False,
         text="# Auth\nExample token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
              "eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",

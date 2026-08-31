@@ -36,7 +36,11 @@ def test_initializes_and_advertises_the_scan_tool() -> None:
     assert names == {"scan_skill_file"}
     for t in out[1]["result"]["tools"]:
         assert t["description"].strip()
-        assert t["inputSchema"]["required"]
+        # The tool takes exactly one of path/content, so neither is unconditionally required;
+        # both must be declared and the description must state the contract.
+        props = t["inputSchema"]["properties"]
+        assert "path" in props and "content" in props
+        assert "exactly one" in t["description"].lower()
 
 
 def test_a_clean_file_passes_through_the_client() -> None:
@@ -79,4 +83,54 @@ def test_a_non_string_content_fails_closed() -> None:
          "params": {"name": "scan_skill_file", "arguments": {"content": 12345}}},
     ])
     body = json.loads(out[1]["result"]["content"][0]["text"])
+    assert body["verdict"] == "QUARANTINE"
+
+
+def test_the_path_input_scans_a_file_without_ingesting_it() -> None:
+    out = _talk([
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+         "params": {"name": "scan_skill_file",
+                    "arguments": {"path": "examples/poisoned-SKILL.md"}}},
+    ])
+    body = json.loads(out[1]["result"]["content"][0]["text"])
+    assert body["verdict"] == "QUARANTINE"
+    assert body["findings"]
+
+
+def test_a_path_passed_as_content_reviews_not_passes() -> None:
+    # The footgun: a caller sends a path string where file text was expected. A confident PASS
+    # would be a fail-open on a load-gating tool.
+    out = _talk([
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+         "params": {"name": "scan_skill_file",
+                    "arguments": {"content": "examples/poisoned-SKILL.md"}}},
+    ])
+    body = json.loads(out[1]["result"]["content"][0]["text"])
+    assert body["verdict"] == "REVIEW"
+
+
+def test_ping_returns_an_empty_result() -> None:
+    out = _talk([
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "id": 3, "method": "ping", "params": {}},
+    ])
+    ping = [m for m in out if m.get("id") == 3][0]
+    assert ping["result"] == {}
+    assert "error" not in ping
+
+
+def test_an_oversized_request_fails_closed_with_a_verdict_not_silence() -> None:
+    from skill_tripwire.scan import MAX_INPUT_BYTES
+    out = _talk([
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+         "params": {"name": "scan_skill_file", "arguments": {"content": "A" * (MAX_INPUT_BYTES + 50)}}},
+        {"jsonrpc": "2.0", "id": 3, "method": "ping", "params": {}},
+    ])
+    answered = {m.get("id") for m in out}
+    assert 2 in answered, "the oversized request must be answered, not dropped"
+    over = [m for m in out if m.get("id") == 2][0]
+    body = json.loads(over["result"]["content"][0]["text"])
     assert body["verdict"] == "QUARANTINE"

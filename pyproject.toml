@@ -13,6 +13,7 @@ dev = ["pytest>=7,<10"]
 
 [project.scripts]
 skill-tripwire = "skill_tripwire.cli:main"
+skill-tripwire-server = "skill_tripwire.server:main"
 
 [build-system]
 requires = ["setuptools>=68"]

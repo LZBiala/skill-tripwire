@@ -26,13 +26,13 @@ yet computed. It is the top open item, and no home-made proxy is printed in its*
 
 ## False positives (all benign samples, several chosen as probes)
 
-- false positives: 0/28, so FPR <= 10.7% (rule of three)
+- false positives: 0/29, so FPR <= 10.3% (rule of three)
 - benign probes included: IMPORTANT phrasing, a narrow Bash grant, a matching WebFetch grant, a UUID, a credentials path, a benign base64 blob, a curl mention
 
 ## Precision at the measured ~2% marketplace base rate
 
-- using the limit-probe recall and the FPR bound: 4.9%
-- using the tuned upper-bound recall: 16.0%
+- using the limit-probe recall and the FPR bound: 5.1%
+- using the tuned upper-bound recall: 16.5%
 (Both use self-authored recall, so read them as illustrations of the base-rate
 effect, not as field precision.)
 
