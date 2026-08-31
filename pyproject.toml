@@ -1,0 +1,26 @@
+[project]
+name = "skill-tripwire"
+version = "0.1.0"
+description = "A fail-closed scanner for poisoned agent skill and config files, with published detection and false-positive rates."
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = []
+
+# The scanner has no runtime dependencies. pytest is needed only to run the gates.
+[project.optional-dependencies]
+dev = ["pytest>=7,<10"]
+
+[project.scripts]
+skill-tripwire = "skill_tripwire.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

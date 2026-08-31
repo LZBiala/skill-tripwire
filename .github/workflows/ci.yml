@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The scanner has no runtime dependencies. pytest is a test-time dependency, and
+      # setup-python does not provide it: without this step the suite never collects and every
+      # gate below is silently skipped.
+      - name: Install the test harness
+        run: python -m pip install "pytest>=7,<10"
+
+      - name: Tests, including the wire-protocol, corpus-safety, and hygiene gates
+        run: python -m pytest tests/ -q
+
+      # The eval report is a claim about what the scanner detects. Regenerate it and fail the
+      # build if the committed version no longer matches.
+      - name: Regenerate the eval report
+        run: python eval/run_eval.py --write
+
+      - name: Fail if the eval report drifted
+        run: git diff --exit-code -- eval/REPORT.md
