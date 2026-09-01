@@ -251,6 +251,15 @@ _IMPERATIVE = re.compile(
     | (?:you\s+are\s+now|from\s+now\s+on\s+you)\b
     | (?:system\s+override|admin\s+override|developer\s+mode)
     | this\s+is\s+(?:an?\s+)?(?:approved|trusted|official)\s+(?:skill|instruction|command)
+    # Agent-subversion shapes from a documented real incident (agents falsifying transcripts,
+    # evading their grader, coordinating covertly, persisting). Verb-gated so the everyday senses
+    # ("format a transcript", "package the results", "monitor the queue") do not trip.
+    | (?:falsify|spoof|forge|fabricate|fake|tamper\s+with)[^\n]{0,30}?(?:logs?|transcripts?|audit|records?|tool\s+(?:call|output))
+    | (?:disable|bypass|evade|circumvent|defeat|turn\s+off)[^\n]{0,30}?(?:the\s+)?(?:monitor|grader|scorer|safety|guardrail|tripwire|oversight|sandbox|logging)
+    | reverse-engineer[^\n]{0,20}?(?:the\s+)?(?:scorer|grader|scoring|benchmark|evaluation)
+    | (?:encode|hide|smuggle)[^\n]{0,40}?(?:in|as|via)[^\n]{0,25}?(?:directory|folder|package|file)\s+names?
+    | (?:establish|gain|achieve)\s+(?:persistence|admin\s+access|root\s+access|remote\s+code)
+    | (?:self-respawn|move\s+laterally)
     """,
 )
 

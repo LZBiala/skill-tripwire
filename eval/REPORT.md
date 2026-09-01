@@ -9,7 +9,7 @@ headline - precision recomputed at the ~2% base rate the field measures.
 
 ## Detection on the self-authored corpus (NOT a generalization number)
 
-- on samples the rules were built against: 16/16 = 100.0%. This is an upper bound and nothing more.
+- on samples the rules were built against: 19/19 = 100.0%. This is an upper bound and nothing more.
 - on the author's own limit-probe set (written knowing the rules, each sample pre-labeled a designed catch or a designed miss): 3/11 = 27.3%.
 - probes that miss, kept on the scorecard (each a real, named limit): ho-homoglyph-curl, ho-semantic-exfil-nourl, ho-capability-webfetch-drift, ho-structural-exfil, ho-dns-env-exfil, ho-separated-hex, ho-html-comment-conceal, ho-cross-tool-shadow
 
@@ -26,13 +26,13 @@ yet computed. It is the top open item, and no home-made proxy is printed in its*
 
 ## False positives (all benign samples, several chosen as probes)
 
-- false positives: 0/29, so FPR <= 10.3% (rule of three)
+- false positives: 0/30, so FPR <= 10.0% (rule of three)
 - benign probes included: IMPORTANT phrasing, a narrow Bash grant, a matching WebFetch grant, a UUID, a credentials path, a benign base64 blob, a curl mention
 
 ## Precision at the measured ~2% marketplace base rate
 
-- using the limit-probe recall and the FPR bound: 5.1%
-- using the tuned upper-bound recall: 16.5%
+- using the limit-probe recall and the FPR bound: 5.3%
+- using the tuned upper-bound recall: 16.9%
 (Both use self-authored recall, so read them as illustrations of the base-rate
 effect, not as field precision.)
 
@@ -51,7 +51,7 @@ wild. FPR, not recall, is the number that decides whether anyone trusts the alar
 | pre-execution-shell | block | ASI:code-execution | 1/1 = 100.0% | 1/1 = 100.0% | 0 |
 | broad-shell-capability | block | ASI:excessive-capability | 2/3 = 66.7% | 2/2 = 100.0% | 0 |
 | exfiltration | block | ASI:data-exfiltration | 2/4 = 50.0% | 2/2 = 100.0% | 0 |
-| imperative-to-agent | warn | ASI:social-engineering | 2/2 = 100.0% | 2/2 = 100.0% | 0 |
+| imperative-to-agent | warn | ASI:social-engineering | 5/5 = 100.0% | 5/5 = 100.0% | 0 |
 | high-entropy-blob | warn | ASI:obfuscation | 1/1 = 100.0% | 1/1 = 100.0% | 0 |
 
 Per-rule precision is 100% on this corpus only because no benign sample triggers
