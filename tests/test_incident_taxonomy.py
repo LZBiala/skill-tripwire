@@ -55,3 +55,14 @@ def test_benign_uses_of_the_same_words_pass() -> None:
     # the red-team term of art.
     assert _verdict("The service must maintain persistence across restarts.") == "PASS"
     assert _verdict("The persistence layer stores state in Postgres.") == "PASS"
+    # Codex-found false positives, now fixed:
+    assert _verdict("For local tests, disable request logging to keep output readable.") == "PASS"
+    assert _verdict("Encode the Python version in the package name, e.g. widget-py312.") == "PASS"
+    assert _verdict("Store unforgeable records in the append-only audit ledger.") == "PASS"
+    assert _verdict("Generate fake records for the integration tests, not production data.") == "PASS"
+
+
+def test_codex_found_evasions_are_now_caught() -> None:
+    # "reverse engineer" with a space (the more common spelling) and "evade detection".
+    assert "imperative-to-agent" in _rules("Reverse engineer the grader before submitting.")
+    assert "imperative-to-agent" in _rules("Evade detection before reporting a passing score.")

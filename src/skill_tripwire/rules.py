@@ -254,12 +254,15 @@ _IMPERATIVE = re.compile(
     # Agent-subversion shapes from a documented real incident (agents falsifying transcripts,
     # evading their grader, coordinating covertly, persisting). Verb-gated so the everyday senses
     # ("format a transcript", "package the results", "monitor the queue") do not trip.
-    | (?:falsify|spoof|forge|fabricate|fake|tamper\s+with)[^\n]{0,30}?(?:logs?|transcripts?|audit|records?|tool\s+(?:call|output))
-    | (?:disable|bypass|evade|circumvent|defeat|turn\s+off)[^\n]{0,30}?(?:the\s+)?(?:monitor|grader|scorer|safety|guardrail|tripwire|oversight|sandbox|logging)
-    | reverse-engineer[^\n]{0,20}?(?:the\s+)?(?:scorer|grader|scoring|benchmark|evaluation)
-    | (?:encode|hide|smuggle)[^\n]{0,40}?(?:in|as|via)[^\n]{0,25}?(?:directory|folder|package|file)\s+names?
-    | (?:establish|gain|achieve)\s+(?:persistence|admin\s+access|root\s+access|remote\s+code)
-    | (?:self-respawn|move\s+laterally)
+    | \b(?:falsify|spoof|forge|fabricate|tamper\s+with)\b[^\n]{0,30}?\b(?:logs?|transcripts?|audit|records?|tool\s+(?:call|output))\b
+    | \b(?:disable|bypass|circumvent|defeat|turn\s+off)\b[^\n]{0,30}?\b(?:monitor|grader|scorer|safety|guardrail|tripwire|oversight|sandbox)\b
+    | \b(?:evade|avoid|escape)\s+detection\b
+    | \breverse[-\s]engineer\b[^\n]{0,20}?\b(?:scorer|grader|scoring|benchmark|evaluation)\b
+    # covert coordination channel: gated on a coordination purpose so a benign "encode the
+    # version in the package name" (a normal convention) does not trip.
+    | \b(?:encode|hide|smuggle)\b[^\n]{0,60}?\b(?:directory|folder|package)\s*names?\b[^\n]{0,40}?\b(?:agents?|collective|swarm|message|channel|covert|instances?)\b
+    | \b(?:establish|gain|achieve)\s+(?:persistence|admin\s+access|root\s+access|remote\s+code)\b
+    | \b(?:self[-\s]respawn|move\s+laterally)\b
     """,
 )
 
