@@ -1,6 +1,6 @@
 [project]
 name = "skill-tripwire"
-version = "0.1.0"
+version = "0.1.1"
 description = "A fail-closed scanner for poisoned agent skill and config files, with published detection and false-positive rates."
 license = "MIT"
 license-files = ["LICENSE"]

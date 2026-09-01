@@ -170,3 +170,27 @@ def test_the_readme_quotes_the_simulations_own_benign_count() -> None:  # cross-
     )
     stale = [t for t in re.findall(r"45\d,\d{3}", readme) if t != formatted]
     assert not stale, f"README carries stale benign counts: {stale}"
+
+
+def test_the_readme_example_block_matches_the_real_scan_output() -> None:  # front-door drift gate
+    """The README headline example prints a real scan. QA found it stale (wrong finding order,
+    wrong offset); on a repo whose brand is checkable numbers, the first command a visitor runs
+    must match. Scan examples/poisoned-SKILL.md and assert the fenced block reproduces it."""
+    import re
+    from skill_tripwire.scan import scan_file
+    from skill_tripwire import report
+    result = scan_file(ROOT / "examples" / "poisoned-SKILL.md")
+    produced = report.to_text(result).strip()
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    # the command fence, then the plain output fence right after it
+    m = re.search(
+        r"scan examples/poisoned-SKILL\.md\n```\n\s*```\n(.*?)```",
+        readme, re.S,
+    )
+    assert m, "README no longer shows a fenced poisoned-SKILL.md example output block"
+    shown = m.group(1).strip()
+    assert shown == produced, (
+        "README example block is stale. Regenerate with: "
+        "skill-tripwire scan examples/poisoned-SKILL.md\n"
+        "--- README ---\n" + shown + "\n--- tool ---\n" + produced
+    )

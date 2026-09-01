@@ -4,5 +4,5 @@
   entry: skill-tripwire scan
   language: python
   # Only the files an agent actually loads. Add or narrow this in your own .pre-commit-config.
-  files: '(^|/)(SKILL\.md|CLAUDE\.md|AGENTS\.md)$|\.mcp\.json$'
+  files: '(^|/)(SKILL\.md|CLAUDE\.md|AGENTS\.md|GEMINI\.md)$|\.mcp\.json$'
   pass_filenames: true

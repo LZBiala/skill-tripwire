@@ -33,3 +33,20 @@ jobs:
 
       - name: Fail if the eval report drifted
         run: git diff --exit-code -- eval/REPORT.md
+
+      # The eval numbers are gated above; the integration surface was not. These three cheap
+      # steps exercise the doors the README advertises, so they cannot break with a green build.
+      - name: The package installs and its console scripts run (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          python -m pip install .
+          skill-tripwire selftest
+          skill-tripwire scan examples/poisoned-SKILL.md || test $? -eq 2
+
+      - name: The composite Action scans this repo (Linux only)
+        if: runner.os == 'Linux'
+        uses: ./
+        with:
+          paths: examples
+          fail-on: quarantine
+        continue-on-error: true
