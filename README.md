@@ -223,7 +223,7 @@ A scanner that parses hostile input must never crash or hang, and must not cry w
 files. [eval/SIMULATION.md](eval/SIMULATION.md) records a seeded run over **1,000,000** randomly
 generated inputs - benign config text, payload-preserving obfuscations of known attacks, and
 adversarial junk: **0 crashes, 0 scans over the 0.25s hang bound** (the slowest single scan
-stayed in single-digit milliseconds), and **0 false positives across 450,346 random benign
+stayed in single-digit milliseconds), and **0 false positives across 450,360 random benign
 files**. The counts are seed-deterministic; the exact timing is machine-dependent. Reproduce with
 `python tools/simulate.py --n 1000000 --seed 1`. The attack-variant catch rate is 100 percent,
 but honestly labeled an upper bound - they are obfuscations of self-authored templates, so that

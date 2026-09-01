@@ -151,3 +151,22 @@ def test_the_eval_report_regenerates_byte_identical() -> None:  # drift gate
     assert proc.stdout == committed.read_text(encoding="utf-8"), (
         "eval/REPORT.md is stale. Regenerate it with: python eval/run_eval.py --write"
     )
+
+
+def test_the_readme_quotes_the_simulations_own_benign_count() -> None:  # cross-file drift gate
+    """The 2026-08-31 drift: README said 450,346 while the regenerated simulation said
+    450,360 - a 14-file lie on the front page of a repo whose brand is checkable numbers.
+    CI gated only REPORT.md, so this figure had no gate. Now it does."""
+    import re
+    sim = (ROOT / "eval" / "SIMULATION.md").read_text(encoding="utf-8")
+    m = re.search(r"benign (\d+)", sim)
+    assert m, "SIMULATION.md no longer states its benign count"
+    benign = int(m.group(1))
+    formatted = f"{benign:,}"
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert formatted in readme, (
+        f"README does not quote the simulation's benign count {formatted} - "
+        "it has drifted from eval/SIMULATION.md"
+    )
+    stale = [t for t in re.findall(r"45\d,\d{3}", readme) if t != formatted]
+    assert not stale, f"README carries stale benign counts: {stale}"
