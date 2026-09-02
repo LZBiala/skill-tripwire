@@ -111,7 +111,14 @@ author's own limit-probe samples - written to expose the rules' blind spots - de
 from 100 percent (on the samples the rules were built against) to well under half, and every
 miss is named in [eval/REPORT.md](eval/REPORT.md). Those numbers are demonstrations, not a
 generalization measurement: the author picked the samples, so a real number needs a corpus
-written by someone else, which is this project's top open item. And at the real-world base
+written by someone else, which is this project's top open item. A live judge (the Claude Code
+CLI's account-default model, which routed calls to two models, both named in the report) asked
+the same question on the same 60 ids, 58 of them scored (pre-registered; 174 answered calls; two
+samples the judge's own safety layer refused to classify, so the run is published as partial with
+every id named) flagged 25 of the 28 scored poisoned samples and 0 of 30 clean ones (a false-alarm
+rate bounded only at 10.0% by the rule of three), catching seven held-out probes the rules miss
+and missing two the rules catch, under the same self-authored caveat: see
+[eval/JUDGE-LIVE-2026-09.md](eval/JUDGE-LIVE-2026-09.md). And at the real-world base
 rate, where only about 2 percent of public skills are actually malicious, even a perfect-recall
 scanner with a realistic false-positive rate is *wrong most of the time it alarms* - the
 base-rate fallacy, computed in the report.

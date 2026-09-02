@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- eval: a pre-registered live-judge study on the same 60-sample corpus (tools/judge_live.py, 22 tests, raw record and report under eval/), published as a partial run with the two refused ids named; the README links it with the caveat in the same sentence and a test pins the README's figures to the report.
+
 All notable changes to skill-tripwire are recorded here. The published numbers in the README
 and eval/ are regenerated in CI, so this file tracks capability and interface changes, not
 metrics.
