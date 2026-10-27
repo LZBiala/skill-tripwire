@@ -62,9 +62,25 @@ def test_the_scan_script_checks_the_threshold_and_splits_paths_with_globbing_off
     assert 'skill-tripwire scan --fail-on "$TRIPWIRE_FAIL_ON" -- "${tripwire_paths[@]}"' in scan
 
 
+def _assert_read_only_token(text: str) -> None:
+    """The read-only token pin: exactly one permissions key in any spelling (bare or quoted,
+    top level or job level), and it is the top-level block, whose whole body is contents: read."""
+    keys = re.findall(r"(?m)^\s*[\"']?permissions[\"']?\s*:", text)
+    assert len(keys) == 1, "one permissions key, the top-level one, not " + str(len(keys))
+    lines = text.splitlines()
+    assert "permissions:" in lines, "a top-level permissions block"
+    body: list[str] = []
+    for line in lines[lines.index("permissions:") + 1:]:
+        if line[:1].strip():
+            break  # the next column-0 line ends the block
+        if line.strip():
+            body.append(line)
+    assert body == ["  contents: read"], "the block holds contents: read and nothing else: " + str(body)
+
+
 def test_the_workflow_has_a_read_only_token_and_pins_actions_by_sha() -> None:
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    assert re.search(r"(?m)^permissions:\n  contents: read$", text)
+    _assert_read_only_token(text)
     assert "uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4" in text
     assert "uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5" in text
     for m in re.finditer(r"uses:\s*([^\s#]+)", text):
