@@ -210,6 +210,7 @@ _UNC_SPELLINGS = ("\\\\host.invalid\\share\\SKILL.md", "//host.invalid/share/SKI
 
 
 def test_a_path_outside_the_root_is_refused_before_any_file_system_call(tmp_path: Path) -> None:
+    import contextlib
     import ntpath
     from unittest import mock
 
@@ -231,8 +232,20 @@ def test_a_path_outside_the_root_is_refused_before_any_file_system_call(tmp_path
         calls.append(self.name)
         return real_resolve(self, strict)
 
+    def refusing(label: str) -> object:
+        def refuse(*args: object, **kwargs: object) -> object:
+            calls.append(label)
+            raise OSError(label + " may not run before the root rule refuses a path")
+        return refuse
+
     outside = [*_UNC_SPELLINGS, str(tmp_path / "elsewhere.md")]
-    with mock.patch.object(server, "_ROOT", root), mock.patch.object(Path, "resolve", refusing_resolve):
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(mock.patch.object(server, "_ROOT", root))
+        stack.enter_context(mock.patch.object(Path, "resolve", refusing_resolve))
+        stack.enter_context(mock.patch.object(os, "stat", refusing("os.stat")))
+        stack.enter_context(mock.patch.object(os, "lstat", refusing("os.lstat")))
+        if hasattr(ntpath, "_getfinalpathname"):
+            stack.enter_context(mock.patch.object(ntpath, "_getfinalpathname", refusing("ntpath._getfinalpathname")))
         for typed in outside:
             body = server.dispatch("scan_skill_file", {"path": typed})
             assert [found["rule"] for found in body["findings"]] == ["path-outside-root"]
@@ -246,13 +259,6 @@ def test_a_path_outside_the_root_is_refused_before_any_file_system_call(tmp_path
     # there: each spelling must still be refused with no stat, lstat, final-path or resolve call.
     calls.clear()
     drive = Path(root.anchor)
-
-    def refusing(label: str) -> object:
-        def refuse(*args: object, **kwargs: object) -> object:
-            calls.append(label)
-            raise OSError(label + " may not run for a UNC or device spelling")
-        return refuse
-
     with (mock.patch.object(server, "_ROOT", drive), mock.patch.object(server, "_ROOT_AS_GIVEN", drive),
           mock.patch.object(Path, "resolve", refusing_resolve), mock.patch.object(os, "stat", refusing("os.stat")),
           mock.patch.object(os, "lstat", refusing("os.lstat")),
@@ -303,6 +309,7 @@ def test_an_argument_the_server_does_not_know_is_ignored_with_a_line_naming_the_
 
 
 def test_a_unc_string_passed_as_content_reads_review_with_no_file_system_call() -> None:
+    import ntpath
     from unittest import mock
 
     import pytest
@@ -317,10 +324,18 @@ def test_a_unc_string_passed_as_content_reads_review_with_no_file_system_call() 
         calls.append(self.name)
         return False
 
+    def refusing(label: str) -> object:
+        def refuse(*args: object, **kwargs: object) -> object:
+            calls.append(label)
+            raise OSError(label + " may not run for a UNC string passed as content")
+        return refuse
+
     with mock.patch.object(Path, "is_file", recording_is_file):
-        for typed in _UNC_SPELLINGS:
-            body = server.dispatch("scan_skill_file", {"content": typed})
-            assert [found["rule"] for found in body["findings"]] == ["path-as-content"]
+        with (mock.patch.object(os, "stat", refusing("os.stat")), mock.patch.object(os, "lstat", refusing("os.lstat")),
+              mock.patch.object(ntpath, "_getfinalpathname", refusing("ntpath._getfinalpathname"))):
+            for typed in _UNC_SPELLINGS:
+                body = server.dispatch("scan_skill_file", {"content": typed})
+                assert [found["rule"] for found in body["findings"]] == ["path-as-content"]
         assert calls == [], "a UNC string passed as content reached the file system"
         server.dispatch("scan_skill_file", {"content": "SKILL.md"})
     assert calls, "a short one-line content that is not a UNC string is still stat-ed (the guard)"
