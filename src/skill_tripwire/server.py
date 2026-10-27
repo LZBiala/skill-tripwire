@@ -6,13 +6,20 @@ client sends may end the session (a bad message is answered, not fatal), and any
 server cannot cleanly handle returns a QUARANTINE verdict rather than a silence a caller might
 read as safe.
 
-Run:  python -m skill_tripwire.server
+Run:  python -m skill_tripwire.server [--root FOLDER]
+
+A 'path' is read only when it resolves inside one folder: the working directory the server
+started in, or the folder named by --root. Any other path is refused before it is opened; one
+whose text already lies outside (a UNC or device path among them) before any file system call.
 """
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import re
 import sys
+from pathlib import Path
 from typing import Any
 
 from . import report
@@ -28,8 +35,10 @@ TOOLS: list[dict[str, Any]] = [
             "shell grant, or a read-and-exfiltrate instruction. Returns a fail-closed verdict of "
             "PASS, REVIEW, or QUARANTINE with named evidence. Pass exactly one of 'path' (a file "
             "on disk, read fail-closed - prefer this so you never have to ingest an untrusted "
-            "file yourself) or 'content' (text you already hold). A triage floor, not a "
-            "guarantee: call it before loading a file you did not write."
+            "file yourself) or 'content' (text you already hold). A 'path' must resolve inside "
+            "the folder the server started in (or its --root); any other path is refused, not "
+            "read. A triage floor, not a guarantee: call it before loading a file you did not "
+            "write."
         ),
         "inputSchema": {
             "type": "object",
@@ -47,6 +56,17 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 _ID_IN_PREFIX = re.compile(r'"id"\s*:\s*(\d+|"[^"]{0,128}")')
+
+# The one folder a 'path' may resolve inside, set once by main() from --root or the working
+# directory at start, before serve() reads a request: _ROOT as resolved (the check after the
+# path is resolved) and _ROOT_AS_GIVEN as typed, made absolute with no file system call (the
+# check on the text before it). None (an import without main, as the tests do) means the
+# working directory at the call.
+_ROOT: Path | None = None
+_ROOT_AS_GIVEN: Path | None = None
+
+ROOT_RULE = ("Path refused by the root rule: a 'path' must resolve inside the folder the "
+             "server started in, or the folder named by --root. Nothing was read.")
 
 
 def _refuse(verdict: str, rule: str, reason: str) -> dict[str, Any]:
@@ -66,11 +86,38 @@ def _looks_like_a_path(content: str) -> bool:
     s = content.strip()
     if not s or "\n" in s or len(s) > 260:
         return False
+    if os.name == "nt" and len(s) > 1 and s[0] in "\\/" and s[1] in "\\/":
+        # A UNC or device path is never stat-ed: on Windows the stat would open a network share.
+        return True
     try:
         from pathlib import Path
         return Path(s).is_file()
     except OSError:
         return False
+
+
+def _roots() -> tuple[Path, Path]:
+    """The root as resolved and as given. Without main, the working directory at the call."""
+    if _ROOT is None:
+        here = os.getcwd()
+        return Path(here).resolve(), Path(os.path.abspath(here))
+    return _ROOT, _ROOT_AS_GIVEN if _ROOT_AS_GIVEN is not None else _ROOT
+
+
+def _confined(path: str, root: Path, given: Path) -> Path | None:
+    """The resolved path when it lies inside the root, else None. First a check on the text
+    alone (os.path.abspath joins and folds text with no file system call): a path not under the
+    root as resolved or as given, a UNC or device path among them, is refused before anything
+    is opened or stat-ed. Then the path is resolved, links followed, and checked again, so a
+    '..' walk and a link out of the root are refused alike."""
+    try:
+        typed = Path(os.path.abspath(path))
+        if not (typed.is_relative_to(root) or typed.is_relative_to(given)):
+            return None
+        resolved = Path(path).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return resolved if resolved.is_relative_to(root) else None
 
 
 def dispatch(name: str, args: Any) -> dict[str, Any]:
@@ -89,9 +136,20 @@ def dispatch(name: str, args: Any) -> dict[str, Any]:
     if has_path and has_content:
         return _quarantine("Pass exactly one of 'path' or 'content', not both.")
     if has_path:
-        # scan_file stat-checks size before reading and fails closed on oversize/unreadable, so
-        # the raw file never enters the caller's context.
-        return report.to_dict(scan_file(path, surface=surface))
+        # The root rule runs before any open or read; the refusal names the rule, never the
+        # path typed. scan_file then stat-checks size before reading and fails closed on
+        # oversize/unreadable, so the raw file never enters the caller's context. A location
+        # that names the file shows it from the root, never as the absolute path.
+        root, given = _roots()
+        resolved = _confined(path, root, given)
+        if resolved is None:
+            return _refuse("QUARANTINE", "path-outside-root", ROOT_RULE)
+        out = report.to_dict(scan_file(resolved, surface=surface))
+        from_root = resolved.relative_to(root).as_posix()
+        for finding in out["findings"]:
+            if finding["location"] == str(resolved):
+                finding["location"] = from_root
+        return out
     if not has_content:
         got = type(content).__name__
         return _quarantine(f"Pass 'path' or 'content'. content must be a string, got {got}.")
@@ -184,6 +242,23 @@ def serve() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # The root is module state on purpose: set once here, before serve() reads a request, and
+    # read by dispatch; the tests set it directly to call dispatch in process.
+    global _ROOT, _ROOT_AS_GIVEN
+    ap = argparse.ArgumentParser(prog="skill-tripwire-server", allow_abbrev=False, add_help=False,
+                                 description="MCP stdio server exposing scan_skill_file.")
+    ap.add_argument("--root", default=None,
+                    help="the one folder a 'path' may resolve inside (default: the working "
+                         "directory at start)")
+    ns, extra = ap.parse_known_args(argv)
+    if extra:
+        # The server took no arguments before --root and ignored any; it still ignores them.
+        print("skill-tripwire-server: arguments other than --root are ignored", file=sys.stderr)
+    given = ns.root if ns.root is not None else os.getcwd()
+    root = Path(given).resolve()
+    if not root.is_dir():
+        ap.error("--root must name an existing folder")
+    _ROOT, _ROOT_AS_GIVEN = root, Path(os.path.abspath(given))
     serve()
     return 0
 

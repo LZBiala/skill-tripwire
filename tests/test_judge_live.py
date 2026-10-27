@@ -250,3 +250,51 @@ def test_cli_parse_of_claude_json_output():
     rec = jl.parse_cli_json(raw)
     assert rec == {"result": "x\nBENIGN", "model": "claude-something", "cost_usd": 0.02,
                    "duration_ms": 900}
+
+
+# ---- the live call's argv, with subprocess faked (never a live call) ----------------------
+
+def test_the_live_call_turns_every_tool_off_and_loads_no_mcp_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    class Done:
+        returncode = 0
+        stdout = json.dumps({"result": "x\nBENIGN", "modelUsage": {"claude-fake": {}}})
+        stderr = ""
+
+    def fake_run(cmd: list[str], **kwargs: object) -> Done:
+        seen["cmd"] = cmd
+        seen["env"] = kwargs["env"]
+        return Done()
+
+    monkeypatch.setattr(jl, "_claude_exe", lambda: ["claude"])
+    monkeypatch.setattr(jl.subprocess, "run", fake_run)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    rec = jl.live_runner("PROMPT-TEXT")
+    assert seen["cmd"] == ["claude", "-p", "PROMPT-TEXT", "--output-format", "json",
+                           "--tools", "", "--strict-mcp-config"]
+    child_env = seen["env"]
+    assert isinstance(child_env, dict) and child_env and "CLAUDECODE" not in child_env
+    assert rec["model"] == "claude-fake"
+    doc = " ".join((jl.__doc__ or "").split())
+    assert ("a run with them is a new run with its own --out, never a resume into "
+            "eval/judge-live-2026-09.jsonl") in doc, "the 2026-09 record stays a tools-on record"
+
+
+def test_the_live_call_refuses_a_cmd_or_bat_launcher_that_cmd_exe_would_re_parse(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    for launcher in ("claude.cmd", "claude.bat", "CLAUDE.CMD"):
+        shim = "C:\\fake\\bin\\" + launcher
+
+        def which_finds_only_the_shim(name: str, shim: str = shim) -> str | None:
+            return None if name == "claude.exe" else shim
+
+        monkeypatch.setattr(jl.shutil, "which", which_finds_only_the_shim)
+        with pytest.raises(RuntimeError, match="cmd.exe would re-parse the prompt"):
+            jl._claude_exe()
+
+    def which_finds_the_exe(name: str) -> str | None:
+        return "C:\\fake\\bin\\claude.exe" if name == "claude.exe" else None
+
+    monkeypatch.setattr(jl.shutil, "which", which_finds_the_exe)
+    assert jl._claude_exe() == ["C:\\fake\\bin\\claude.exe"], "a real executable still runs"

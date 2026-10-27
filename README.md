@@ -200,6 +200,10 @@ agent never has to ingest the untrusted file to check it:
 {"name": "scan_skill_file", "arguments": {"path": "/abs/path/to/SKILL.md"}}
 ```
 
+The server reads a path only when it resolves inside the folder the server started in, or the
+folder named by `--root` (`skill-tripwire-server --root /abs/path/to`); any other path is
+refused with a QUARANTINE that names the rule and reads nothing.
+
 Or pass `content` for text you already hold. Every verdict fails closed: an unknown tool, a
 non-string input, an oversized request, or a file that will not decode all return QUARANTINE,
 because a file the scanner could not inspect is precisely the one not to load blind.
@@ -245,12 +249,14 @@ To run the gates yourself: `python -m pip install "pytest>=7"` then `python -m p
 (the test count is whatever pytest reports, not a number this file maintains).
 
 The MCP server needs no PYTHONPATH once installed; point your client at `skill-tripwire-server`,
-or `python -m skill_tripwire.server`:
+or `python -m skill_tripwire.server`. The server reads a `path` only inside the folder the client
+starts it in, which may be your home folder, an app folder or `/`, so name the folder your
+skills live in with `--root` after the server's command, in each form below:
 
 ```json
 {
   "mcpServers": {
-    "skill-tripwire": { "command": "skill-tripwire-server" }
+    "skill-tripwire": { "command": "skill-tripwire-server", "args": ["--root", "/abs/path/to/skills"] }
   }
 }
 ```
@@ -264,9 +270,10 @@ project-root `.mcp.json`. In **Claude Desktop**, add it to `claude_desktop_confi
 {
   "mcpServers": {
     "skill-tripwire": {
-      "command": "skill-tripwire-server"
+      "command": "skill-tripwire-server",
+      "args": ["--root", "/abs/path/to/skills"]
       // or, without installing: "command": "python",
-      //   "args": ["-m", "skill_tripwire.server"],
+      //   "args": ["-m", "skill_tripwire.server", "--root", "/abs/path/to/skills"],
       //   "env": { "PYTHONPATH": "/abs/path/to/skill-tripwire/src" }
     }
   }

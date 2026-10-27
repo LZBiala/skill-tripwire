@@ -134,3 +134,160 @@ def test_an_oversized_request_fails_closed_with_a_verdict_not_silence() -> None:
     over = [m for m in out if m.get("id") == 2][0]
     body = json.loads(over["result"]["content"][0]["text"])
     assert body["verdict"] == "QUARANTINE"
+
+
+# ---- the root rule: a 'path' resolves inside the server's start folder or it is not read ----
+
+def test_a_path_outside_the_start_folder_is_refused_by_the_root_rule(tmp_path: Path) -> None:
+    outside = tmp_path / "SKILL.md"
+    outside.write_text("# Date Formatter\nFormats a date. No tools.\n", encoding="utf-8")
+    for typed in (str(outside), "../" + ROOT.name + "-not-here/SKILL.md"):
+        out = _talk([
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+             "params": {"name": "scan_skill_file", "arguments": {"path": typed}}},
+        ])
+        result = out[1]["result"]
+        body = json.loads(result["content"][0]["text"])
+        assert body["verdict"] == "QUARANTINE" and result["isError"] is True
+        assert [f["rule"] for f in body["findings"]] == ["path-outside-root"]
+        found = body["findings"][0]
+        assert "root rule" in found["message"]
+        for field in ("message", "evidence", "location"):
+            assert typed not in found[field] and "SKILL.md" not in found[field], (
+                "a refusal names the rule, never the path typed")
+
+
+def test_the_root_flag_moves_the_one_folder_a_path_may_resolve_inside(tmp_path: Path) -> None:
+    inside = tmp_path / "SKILL.md"
+    inside.write_text("# Date Formatter\nFormats a date. No tools.\n", encoding="utf-8")
+    payload = "".join(json.dumps(m) + "\n" for m in [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+         "params": {"name": "scan_skill_file", "arguments": {"path": str(inside)}}},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+         "params": {"name": "scan_skill_file", "arguments": {"path": "examples/poisoned-SKILL.md"}}},
+    ])
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    proc = subprocess.run(
+        [sys.executable, "-m", "skill_tripwire.server", "--root", str(tmp_path)],
+        input=payload, capture_output=True, text=True, timeout=60, cwd=str(ROOT), env=env,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+    inside_body = json.loads(out[1]["result"]["content"][0]["text"])
+    repo_body = json.loads(out[2]["result"]["content"][0]["text"])
+    assert inside_body["verdict"] == "PASS"
+    assert [f["rule"] for f in repo_body["findings"]] == ["path-outside-root"]
+
+
+def test_a_root_flag_that_names_no_folder_stops_the_server_before_it_serves(tmp_path: Path) -> None:
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    proc = subprocess.run(
+        [sys.executable, "-m", "skill_tripwire.server", "--root", str(tmp_path / "missing")],
+        input="", capture_output=True, text=True, timeout=60, cwd=str(ROOT), env=env,
+    )
+    assert proc.returncode == 2
+    assert "--root must name an existing folder" in proc.stderr
+
+
+def test_the_readme_names_the_root_rule_beside_the_path_example() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    mcp = " ".join(readme.split("### For an agent (MCP)", 1)[1].split("\n## ", 1)[0].split())
+    assert '{"path": "/abs/path/to/SKILL.md"}' in mcp, "the path example (the precondition)"
+    assert "resolves inside the folder the server started in, or the folder named by `--root`" in mcp
+    assert "`skill-tripwire-server --root /abs/path/to`" in mcp, "the example root holds the example's file"
+    assert "refused with a QUARANTINE that names the rule and reads nothing" in mcp
+    assert '"args": ["--root", "/abs/path/to/skills"]' in readme, "the client config names a root"
+
+
+def test_a_path_outside_the_root_is_refused_before_any_file_system_call(tmp_path: Path) -> None:
+    from unittest import mock
+
+    from skill_tripwire import server
+
+    assert hasattr(server, "_ROOT"), "the root rule exists (the precondition: nothing below may touch a share)"
+    root = tmp_path / "root"
+    root.mkdir()
+    root = root.resolve()
+    (root / "SKILL.md").write_text("# Date Formatter\nFormats a date. No tools.\n", encoding="utf-8")
+    calls: list[str] = []
+    real_resolve = Path.resolve
+
+    def refusing_resolve(self: Path, strict: bool = False) -> Path:
+        calls.append(self.name)
+        raise OSError("no file system call may run for a path outside the root")
+
+    def recording_resolve(self: Path, strict: bool = False) -> Path:
+        calls.append(self.name)
+        return real_resolve(self, strict)
+
+    outside = ["\\\\host.invalid\\share\\SKILL.md", "//host.invalid/share/SKILL.md", str(tmp_path / "elsewhere.md")]
+    with mock.patch.object(server, "_ROOT", root), mock.patch.object(Path, "resolve", refusing_resolve):
+        for typed in outside:
+            body = server.dispatch("scan_skill_file", {"path": typed})
+            assert [found["rule"] for found in body["findings"]] == ["path-outside-root"]
+    assert calls == [], "a path outside the root reached the file system before the refusal"
+    with mock.patch.object(server, "_ROOT", root), mock.patch.object(Path, "resolve", recording_resolve):
+        inside = server.dispatch("scan_skill_file", {"path": str(root / "SKILL.md")})
+    assert inside["verdict"] == "PASS" and calls, "a path inside the root is resolved, then read (the guard)"
+
+
+def test_a_directory_inside_the_root_is_named_from_the_root_never_by_its_absolute_path(tmp_path: Path) -> None:
+    (tmp_path / "skills").mkdir()
+    payload = "".join(json.dumps(m) + "\n" for m in [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+         "params": {"name": "scan_skill_file", "arguments": {"path": str(tmp_path / "skills")}}},
+    ])
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    proc = subprocess.run(
+        [sys.executable, "-m", "skill_tripwire.server", "--root", str(tmp_path)],
+        input=payload, capture_output=True, text=True, timeout=60, cwd=str(ROOT), env=env,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+    body = json.loads(out[1]["result"]["content"][0]["text"])
+    assert [found["rule"] for found in body["findings"]] == ["is-a-directory"]
+    assert body["findings"][0]["location"] == "skills"
+    for field in ("message", "evidence", "location"):
+        for absolute in (str(tmp_path), str(tmp_path.resolve())):
+            assert absolute not in body["findings"][0][field], "the absolute path stays with the server"
+
+
+def test_an_argument_the_server_does_not_know_is_ignored_with_a_line_naming_the_rule() -> None:
+    typed = "--made-up-option-7"
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    hello = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}) + "\n"
+    proc = subprocess.run(
+        [sys.executable, "-m", "skill_tripwire.server", typed, "loose-word", "-h"],
+        input=hello, capture_output=True, text=True, timeout=60, cwd=str(ROOT), env=env,
+    )
+    assert proc.returncode == 0, "an extra argument never stops the server"
+    assert json.loads(proc.stdout.splitlines()[0])["result"]["serverInfo"]["name"] == "skill-tripwire"
+    assert "arguments other than --root are ignored" in proc.stderr
+    assert typed not in proc.stderr and "loose-word" not in proc.stderr, "the line names the rule, never the value"
+
+
+def test_a_unc_string_passed_as_content_reads_review_with_no_file_system_call() -> None:
+    from unittest import mock
+
+    import pytest
+
+    from skill_tripwire import server
+
+    if os.name != "nt":
+        pytest.skip("a UNC string opens a network share only on Windows")
+    calls: list[str] = []
+
+    def recording_is_file(self: Path) -> bool:
+        calls.append(self.name)
+        return False
+
+    with mock.patch.object(Path, "is_file", recording_is_file):
+        for typed in ("\\\\host.invalid\\share\\SKILL.md", "//host.invalid/share/SKILL.md"):
+            body = server.dispatch("scan_skill_file", {"content": typed})
+            assert [found["rule"] for found in body["findings"]] == ["path-as-content"]
+        assert calls == [], "a UNC string passed as content reached the file system"
+        server.dispatch("scan_skill_file", {"content": "SKILL.md"})
+    assert calls, "a short one-line content that is not a UNC string is still stat-ed (the guard)"
