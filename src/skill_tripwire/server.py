@@ -127,16 +127,19 @@ def _confined(path: str, root: Path, given: Path) -> Path | None:
     alone, with no file system call: a UNC or device spelling (_unc_or_device, the NT prefix
     among them) is refused under any root, a drive root too; then os.path.abspath joins and
     folds the text, and a path not under the root as resolved or as given is refused before
-    anything is opened or stat-ed. Then that folded text, the one the check passed, is
-    resolved, links followed, and checked again, so a '..' walk and a link out of the root
-    are refused alike, and the check and the stat always read one spelling."""
+    anything is opened or stat-ed. Then the spelling the kernel will open is resolved, links
+    followed, and checked again, so a '..' walk and a link out of the root are refused alike.
+    On Windows that is the folded text, the one the check passed: Win32 folds '..' by text
+    before the open, so the check and the stat read one spelling. On POSIX it is the path as
+    typed: the kernel follows a link before the '..' after it, so the folded text could name
+    a file the path never opens."""
     if _unc_or_device(path):
         return None
     try:
         typed = Path(os.path.abspath(path))
         if not (typed.is_relative_to(root) or typed.is_relative_to(given)):
             return None
-        resolved = typed.resolve()
+        resolved = (typed if os.name == "nt" else Path(path)).resolve()
     except (OSError, RuntimeError, ValueError):
         return None
     return resolved if resolved.is_relative_to(root) else None

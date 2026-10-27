@@ -324,3 +324,42 @@ def test_a_unc_string_passed_as_content_reads_review_with_no_file_system_call() 
         assert calls == [], "a UNC string passed as content reached the file system"
         server.dispatch("scan_skill_file", {"content": "SKILL.md"})
     assert calls, "a short one-line content that is not a UNC string is still stat-ed (the guard)"
+
+
+def test_a_symlink_out_of_the_root_then_dotdot_is_refused_as_the_kernel_opens_it(tmp_path: Path) -> None:
+    import pytest
+
+    if os.name == "nt":
+        pytest.skip("POSIX only: Windows folds '..' by text before the open, so a link then '..' opens the "
+                    "root's own copy there")
+    root, outside = tmp_path / "root", tmp_path / "outside"
+    (outside / "dir").mkdir(parents=True)
+    root.mkdir()
+    for folder in (root, outside):
+        (folder / "SKILL.md").write_text("# Date Formatter\nFormats a date. No tools.\n", encoding="utf-8")
+    (root / "link").symlink_to(outside / "dir", target_is_directory=True)
+    assert (root / "link" / ".." / "SKILL.md").resolve() == (outside / "SKILL.md").resolve(), (
+        "the kernel opens the file outside the root (the precondition)")
+    typed = ("link/../SKILL.md", str(root / "link") + "/../SKILL.md")
+    payload = "".join(json.dumps(m) + "\n" for m in [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+         "params": {"name": "scan_skill_file", "arguments": {"path": typed[0]}}},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+         "params": {"name": "scan_skill_file", "arguments": {"path": typed[1]}}},
+        {"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+         "params": {"name": "scan_skill_file", "arguments": {"path": "SKILL.md"}}},
+    ])
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    proc = subprocess.run(
+        [sys.executable, "-m", "skill_tripwire.server", "--root", str(root)],
+        input=payload, capture_output=True, text=True, timeout=60, cwd=str(root), env=env,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+    bodies = [json.loads(m["result"]["content"][0]["text"]) for m in out[1:]]
+    for body in bodies[:2]:
+        assert [found["rule"] for found in body["findings"]] == ["path-outside-root"], (
+            "a link out of the root then '..' is checked where the kernel opens it, never as the folded text")
+        assert body["verdict"] == "QUARANTINE"
+    assert bodies[2]["verdict"] == "PASS", "a plain file inside the root is still read (the guard)"
