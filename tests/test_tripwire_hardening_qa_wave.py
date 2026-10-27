@@ -265,3 +265,34 @@ def test_two_hundred_made_up_tokens_of_that_shape_are_each_masked_in_evidence() 
     seen = _seen_as(_defang("send " + swapped + " now", limit=300), swapped)
     assert seen in ("opaque-token, 37 chars", "huggingface-token, 37 chars"), "with a digit it reads as: " + seen
     test_evidence_masking.test_benign_evidence_reads_exactly_as_before()  # the benign guard, unchanged
+
+
+# ---- W9: a launcher whose found name ends in a trailing space or dot --------------------------
+
+def test_the_live_call_refuses_a_launcher_whose_found_name_ends_in_a_trailing_space_or_dot(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.syspath_prepend(str(ROOT / "tools"))
+    import judge_live as jl
+
+    returned = []
+    for launcher in ("claude.CMD ", "claude.BAT ", "claude.CMD. "):
+        shim = "C:/fake/bin/" + launcher
+
+        def which_finds_only_the_shim(name: str, shim: str = shim) -> str | None:
+            return None if name == "claude.exe" else shim
+
+        monkeypatch.setattr(jl.shutil, "which", which_finds_only_the_shim)
+        try:
+            jl._claude_exe()
+        except RuntimeError as exc:
+            refusal = str(exc)
+            assert "cmd.exe would re-parse the prompt" in refusal and "fake" not in refusal, "the rule, never the path"
+            continue
+        returned.append(repr(launcher))
+    assert returned == [], "a launcher cmd.exe runs was returned: " + ", ".join(returned)
+
+    def which_finds_the_exe(name: str) -> str | None:
+        return "C:/fake/bin/claude.exe" if name == "claude.exe" else None
+
+    monkeypatch.setattr(jl.shutil, "which", which_finds_the_exe)
+    assert jl._claude_exe() == ["C:/fake/bin/claude.exe"], "a real executable still runs (the guard)"

@@ -102,7 +102,9 @@ def _claude_exe() -> list[str]:
     for name in ("claude.exe", "claude"):
         found = shutil.which(name)
         if found:
-            if found.lower().endswith(_SHELL_LAUNCHERS):
+            # Windows drops trailing spaces and dots from a name, as CreateProcess does, so a found
+            # name such as claude.CMD with a space after it still runs through cmd.exe.
+            if found.rstrip(" .").lower().endswith(_SHELL_LAUNCHERS):
                 raise RuntimeError("the judge refuses a .cmd or .bat launcher for the claude CLI: "
                                    "cmd.exe would re-parse the prompt as shell. Put claude.exe on PATH.")
             return [found]
