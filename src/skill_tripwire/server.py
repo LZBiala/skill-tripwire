@@ -11,6 +11,10 @@ Run:  python -m skill_tripwire.server [--root FOLDER]
 A 'path' is read only when it resolves inside one folder: the working directory the server
 started in, or the folder named by --root. Any other path is refused before it is opened; one
 whose text already lies outside (a UNC or device path among them) before any file system call.
+On Windows a UNC or device spelling (two leading slashes or backslashes, or the NT prefix: a
+backslash, two question marks and a backslash, each slash read as a backslash) is never
+stat-ed through either input: as a 'path' it is refused under any root, and as one-line
+'content' it reads REVIEW path-as-content.
 """
 from __future__ import annotations
 
@@ -79,6 +83,18 @@ def _quarantine(reason: str) -> dict[str, Any]:
     return _refuse("QUARANTINE", "server-refusal", reason)
 
 
+def _unc_or_device(s: str) -> bool:
+    """On Windows, a UNC or device spelling, which neither input may stat: the first two
+    characters are each a slash or a backslash, or the first four, each slash read as a
+    backslash, are the NT prefix (a backslash, two question marks and a backslash). Windows
+    passes a string with the NT prefix to the NT namespace unchanged, so a stat of either
+    spelling can open a network share."""
+    if os.name != "nt":
+        return False
+    head = s[:4].replace("/", "\\")
+    return head[:2] == "\\\\" or head == "\\??\\"
+
+
 def _looks_like_a_path(content: str) -> bool:
     """A single short newline-free string that resolves to a real file is almost certainly a
     path passed by mistake, not the file's text - a dangerous footgun on a tool whose PASS
@@ -86,8 +102,10 @@ def _looks_like_a_path(content: str) -> bool:
     s = content.strip()
     if not s or "\n" in s or len(s) > 260:
         return False
-    if os.name == "nt" and len(s) > 1 and s[0] in "\\/" and s[1] in "\\/":
-        # A UNC or device path is never stat-ed: on Windows the stat would open a network share.
+    if _unc_or_device(s):
+        # A UNC or device spelling (two leading slashes or backslashes, or the NT prefix: a
+        # backslash, two question marks and a backslash) is never stat-ed: on Windows the stat
+        # would open a network share.
         return True
     try:
         from pathlib import Path
@@ -105,16 +123,20 @@ def _roots() -> tuple[Path, Path]:
 
 
 def _confined(path: str, root: Path, given: Path) -> Path | None:
-    """The resolved path when it lies inside the root, else None. First a check on the text
-    alone (os.path.abspath joins and folds text with no file system call): a path not under the
-    root as resolved or as given, a UNC or device path among them, is refused before anything
-    is opened or stat-ed. Then the path is resolved, links followed, and checked again, so a
-    '..' walk and a link out of the root are refused alike."""
+    """The resolved path when it lies inside the root, else None. First checks on the text
+    alone, with no file system call: a UNC or device spelling (_unc_or_device, the NT prefix
+    among them) is refused under any root, a drive root too; then os.path.abspath joins and
+    folds the text, and a path not under the root as resolved or as given is refused before
+    anything is opened or stat-ed. Then that folded text, the one the check passed, is
+    resolved, links followed, and checked again, so a '..' walk and a link out of the root
+    are refused alike, and the check and the stat always read one spelling."""
+    if _unc_or_device(path):
+        return None
     try:
         typed = Path(os.path.abspath(path))
         if not (typed.is_relative_to(root) or typed.is_relative_to(given)):
             return None
-        resolved = Path(path).resolve()
+        resolved = typed.resolve()
     except (OSError, RuntimeError, ValueError):
         return None
     return resolved if resolved.is_relative_to(root) else None

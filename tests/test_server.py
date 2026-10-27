@@ -201,7 +201,16 @@ def test_the_readme_names_the_root_rule_beside_the_path_example() -> None:
     assert '"args": ["--root", "/abs/path/to/skills"]' in readme, "the client config names a root"
 
 
+# The spellings of a UNC path that reach no file system call on Windows, through either input:
+# two leading slashes or backslashes, and the NT prefix (a backslash, two question marks and a
+# backslash, each slash read as a backslash) before UNC. Each host is made up under .invalid.
+_UNC_SPELLINGS = ("\\\\host.invalid\\share\\SKILL.md", "//host.invalid/share/SKILL.md",
+                  "\\??\\UNC\\host.invalid\\share\\SKILL.md", "/??/UNC/host.invalid/share/SKILL.md",
+                  "\\??/UNC/host.invalid/share/SKILL.md", "/??\\UNC\\host.invalid\\share\\SKILL.md")
+
+
 def test_a_path_outside_the_root_is_refused_before_any_file_system_call(tmp_path: Path) -> None:
+    import ntpath
     from unittest import mock
 
     from skill_tripwire import server
@@ -222,7 +231,7 @@ def test_a_path_outside_the_root_is_refused_before_any_file_system_call(tmp_path
         calls.append(self.name)
         return real_resolve(self, strict)
 
-    outside = ["\\\\host.invalid\\share\\SKILL.md", "//host.invalid/share/SKILL.md", str(tmp_path / "elsewhere.md")]
+    outside = [*_UNC_SPELLINGS, str(tmp_path / "elsewhere.md")]
     with mock.patch.object(server, "_ROOT", root), mock.patch.object(Path, "resolve", refusing_resolve):
         for typed in outside:
             body = server.dispatch("scan_skill_file", {"path": typed})
@@ -231,6 +240,30 @@ def test_a_path_outside_the_root_is_refused_before_any_file_system_call(tmp_path
     with mock.patch.object(server, "_ROOT", root), mock.patch.object(Path, "resolve", recording_resolve):
         inside = server.dispatch("scan_skill_file", {"path": str(root / "SKILL.md")})
     assert inside["verdict"] == "PASS" and calls, "a path inside the root is resolved, then read (the guard)"
+    if os.name != "nt":
+        return  # off Windows these spellings are local names, and a root at / confines nothing (R1)
+    # A drive root holds every local path, so the text check alone passes the NT prefix spelling
+    # there: each spelling must still be refused with no stat, lstat, final-path or resolve call.
+    calls.clear()
+    drive = Path(root.anchor)
+
+    def refusing(label: str) -> object:
+        def refuse(*args: object, **kwargs: object) -> object:
+            calls.append(label)
+            raise OSError(label + " may not run for a UNC or device spelling")
+        return refuse
+
+    with (mock.patch.object(server, "_ROOT", drive), mock.patch.object(server, "_ROOT_AS_GIVEN", drive),
+          mock.patch.object(Path, "resolve", refusing_resolve), mock.patch.object(os, "stat", refusing("os.stat")),
+          mock.patch.object(os, "lstat", refusing("os.lstat")),
+          mock.patch.object(ntpath, "_getfinalpathname", refusing("ntpath._getfinalpathname"))):
+        for typed in _UNC_SPELLINGS:
+            body = server.dispatch("scan_skill_file", {"path": typed})
+            assert [found["rule"] for found in body["findings"]] == ["path-outside-root"]
+    assert calls == [], "under a drive root a UNC or device spelling reached the file system before the refusal"
+    with mock.patch.object(server, "_ROOT", drive), mock.patch.object(server, "_ROOT_AS_GIVEN", drive):
+        under_drive = server.dispatch("scan_skill_file", {"path": str(root / "SKILL.md")})
+    assert under_drive["verdict"] == "PASS", "a path inside a drive root is still read (the guard)"
 
 
 def test_a_directory_inside_the_root_is_named_from_the_root_never_by_its_absolute_path(tmp_path: Path) -> None:
@@ -285,7 +318,7 @@ def test_a_unc_string_passed_as_content_reads_review_with_no_file_system_call() 
         return False
 
     with mock.patch.object(Path, "is_file", recording_is_file):
-        for typed in ("\\\\host.invalid\\share\\SKILL.md", "//host.invalid/share/SKILL.md"):
+        for typed in _UNC_SPELLINGS:
             body = server.dispatch("scan_skill_file", {"content": typed})
             assert [found["rule"] for found in body["findings"]] == ["path-as-content"]
         assert calls == [], "a UNC string passed as content reached the file system"
