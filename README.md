@@ -251,7 +251,7 @@ To run the gates yourself: `python -m pip install "pytest>=7"` then `python -m p
 The MCP server needs no PYTHONPATH once installed; point your client at `skill-tripwire-server`,
 or `python -m skill_tripwire.server`. The server reads a `path` only inside the folder the client
 starts it in, which may be your home folder, an app folder or `/`, so name the folder your
-skills live in with `--root` after the server's command, in each form below:
+skills live in with `--root` after the server's command, in each JSON block below:
 
 ```json
 {
