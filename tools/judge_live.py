@@ -15,6 +15,11 @@ Usage (from the repo root):
     python tools/judge_live.py --smoke 1          # the first sample of each class, k calls each
     python tools/judge_live.py                    # the full corpus, resumable
     python tools/judge_live.py --render-only      # rebuild the report from the JSONL
+
+Since 2026-10-26 each call turns every built-in tool off and loads no MCP server (claude_argv),
+and runs claude only as a real executable, never through a .cmd or .bat launcher (_claude_exe).
+The 2026-09 run predates both flags, so a run with them is a new run with its own --out, never
+a resume into eval/judge-live-2026-09.jsonl.
 """
 from __future__ import annotations
 
@@ -88,17 +93,35 @@ def parse_cli_json(raw: str) -> dict:
 
 # ---- the live runner (never called by tests) ---------------------------------------------
 
+# cmd.exe re-parses the whole command line of a .cmd or .bat launcher, so a prompt holding a
+# sample's text could run as shell there before the model sees it: only a real executable runs.
+_SHELL_LAUNCHERS = (".cmd", ".bat")
+
+
 def _claude_exe() -> list[str]:
-    for name in ("claude.exe", "claude.cmd", "claude"):
+    for name in ("claude.exe", "claude"):
         found = shutil.which(name)
         if found:
+            # Windows drops trailing spaces and dots from a name, as CreateProcess does, so a found
+            # name such as claude.CMD with a space after it still runs through cmd.exe.
+            if found.rstrip(" .").lower().endswith(_SHELL_LAUNCHERS):
+                raise RuntimeError("the judge refuses a .cmd or .bat launcher for the claude CLI: "
+                                   "cmd.exe would re-parse the prompt as shell. Put claude.exe on PATH.")
             return [found]
     raise RuntimeError("claude CLI not on PATH")
 
 
+def claude_argv(prompt: str) -> list[str]:
+    """The judge call's argv. The judge classifies text and needs no tool: `--tools ""` turns
+    every built-in tool off and `--strict-mcp-config` loads no MCP server, so a sample that
+    talks the judge into acting has nothing to act with. The prompt sits before every option,
+    so no option that takes several values can swallow it."""
+    return _claude_exe() + ["-p", prompt, "--output-format", "json", "--tools", "", "--strict-mcp-config"]
+
+
 def live_runner(prompt: str) -> dict:
     env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
-    cmd = _claude_exe() + ["-p", prompt, "--output-format", "json"]
+    cmd = claude_argv(prompt)
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
                           timeout=240, env=env, stdin=subprocess.DEVNULL)
     if proc.returncode != 0 or not proc.stdout.strip():

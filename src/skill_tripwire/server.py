@@ -6,13 +6,24 @@ client sends may end the session (a bad message is answered, not fatal), and any
 server cannot cleanly handle returns a QUARANTINE verdict rather than a silence a caller might
 read as safe.
 
-Run:  python -m skill_tripwire.server
+Run:  python -m skill_tripwire.server [--root FOLDER]
+
+A 'path' is read only when it resolves inside one folder: the working directory the server
+started in, or the folder named by --root. Any other path is refused before it is opened; one
+whose text already lies outside (a UNC or device path among them) before any file system call.
+On Windows a UNC or device spelling (two leading slashes or backslashes, or the NT prefix: a
+backslash, two question marks and a backslash, each slash read as a backslash) is never
+stat-ed through either input: as a 'path' it is refused under any root, and as one-line
+'content' it reads REVIEW path-as-content.
 """
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import re
 import sys
+from pathlib import Path
 from typing import Any
 
 from . import report
@@ -28,8 +39,10 @@ TOOLS: list[dict[str, Any]] = [
             "shell grant, or a read-and-exfiltrate instruction. Returns a fail-closed verdict of "
             "PASS, REVIEW, or QUARANTINE with named evidence. Pass exactly one of 'path' (a file "
             "on disk, read fail-closed - prefer this so you never have to ingest an untrusted "
-            "file yourself) or 'content' (text you already hold). A triage floor, not a "
-            "guarantee: call it before loading a file you did not write."
+            "file yourself) or 'content' (text you already hold). A 'path' must resolve inside "
+            "the folder the server started in (or its --root); any other path is refused, not "
+            "read. A triage floor, not a guarantee: call it before loading a file you did not "
+            "write."
         ),
         "inputSchema": {
             "type": "object",
@@ -48,6 +61,17 @@ TOOLS: list[dict[str, Any]] = [
 
 _ID_IN_PREFIX = re.compile(r'"id"\s*:\s*(\d+|"[^"]{0,128}")')
 
+# The one folder a 'path' may resolve inside, set once by main() from --root or the working
+# directory at start, before serve() reads a request: _ROOT as resolved (the check after the
+# path is resolved) and _ROOT_AS_GIVEN as typed, made absolute with no file system call (the
+# check on the text before it). None (an import without main, as the tests do) means the
+# working directory at the call.
+_ROOT: Path | None = None
+_ROOT_AS_GIVEN: Path | None = None
+
+ROOT_RULE = ("Path refused by the root rule: a 'path' must resolve inside the folder the "
+             "server started in, or the folder named by --root. Nothing was read.")
+
 
 def _refuse(verdict: str, rule: str, reason: str) -> dict[str, Any]:
     return {"verdict": verdict, "surface": "unknown", "findings": [
@@ -59,6 +83,19 @@ def _quarantine(reason: str) -> dict[str, Any]:
     return _refuse("QUARANTINE", "server-refusal", reason)
 
 
+def _unc_or_device(s: str) -> bool:
+    """On Windows, a UNC or device spelling, which neither input may stat: the first two
+    characters are each a slash or a backslash, or the first four, each slash read as a
+    backslash, are the NT prefix (a backslash, two question marks and a backslash). Windows
+    passes a string with the NT prefix to the NT namespace unchanged, so a stat of either
+    spelling can reach the network redirector, which may send the caller's credentials to the
+    named host."""
+    if os.name != "nt":
+        return False
+    head = s[:4].replace("/", "\\")
+    return head[:2] == "\\\\" or head == "\\??\\"
+
+
 def _looks_like_a_path(content: str) -> bool:
     """A single short newline-free string that resolves to a real file is almost certainly a
     path passed by mistake, not the file's text - a dangerous footgun on a tool whose PASS
@@ -66,11 +103,48 @@ def _looks_like_a_path(content: str) -> bool:
     s = content.strip()
     if not s or "\n" in s or len(s) > 260:
         return False
+    if _unc_or_device(s):
+        # A UNC or device spelling (two leading slashes or backslashes, or the NT prefix: a
+        # backslash, two question marks and a backslash) is never stat-ed: on Windows the stat
+        # can reach the network redirector.
+        return True
     try:
-        from pathlib import Path
         return Path(s).is_file()
     except OSError:
         return False
+
+
+def _roots() -> tuple[Path, Path]:
+    """The root as resolved and as given. Without main, the working directory at the call."""
+    if _ROOT is None:
+        here = os.getcwd()
+        return Path(here).resolve(), Path(os.path.abspath(here))
+    return _ROOT, _ROOT_AS_GIVEN if _ROOT_AS_GIVEN is not None else _ROOT
+
+
+def _confined(path: str, root: Path, given: Path) -> Path | None:
+    """The resolved path when it lies inside the root, else None. First checks on the text
+    alone, with no file system call: a UNC or device spelling (_unc_or_device, the NT prefix
+    among them) is refused under any root, a drive root too; then os.path.abspath joins and
+    folds the text, and a path not under the root as resolved or as given is refused before
+    anything is opened or stat-ed. Then the spelling the kernel will open is resolved, links
+    followed, and checked again, so a '..' walk and a link out of the root are refused alike.
+    On Windows that is the folded text, the one the check passed: Win32 folds '..' by text
+    before the open, so the check and the stat read one spelling. On POSIX it is the path as
+    typed: the kernel follows a link before the '..' after it, so the folded text could name
+    a file the path never opens."""
+    if _unc_or_device(path):
+        return None
+    try:
+        typed = Path(os.path.abspath(path))
+        if not (typed.is_relative_to(root) or typed.is_relative_to(given)):
+            return None
+        resolved = (typed if os.name == "nt" else Path(path)).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    # The names as the file system spells them, compared exactly: a case-blind compare through
+    # str.lower() reads U+212A KELVIN SIGN as k, while NTFS keeps the two names apart.
+    return resolved if resolved.parts[:len(root.parts)] == root.parts else None
 
 
 def dispatch(name: str, args: Any) -> dict[str, Any]:
@@ -89,9 +163,20 @@ def dispatch(name: str, args: Any) -> dict[str, Any]:
     if has_path and has_content:
         return _quarantine("Pass exactly one of 'path' or 'content', not both.")
     if has_path:
-        # scan_file stat-checks size before reading and fails closed on oversize/unreadable, so
-        # the raw file never enters the caller's context.
-        return report.to_dict(scan_file(path, surface=surface))
+        # The root rule runs before any open or read; the refusal names the rule, never the
+        # path typed. scan_file then stat-checks size before reading and fails closed on
+        # oversize/unreadable, so the raw file never enters the caller's context. A location
+        # that names the file shows it from the root, never as the absolute path.
+        root, given = _roots()
+        resolved = _confined(path, root, given)
+        if resolved is None:
+            return _refuse("QUARANTINE", "path-outside-root", ROOT_RULE)
+        out = report.to_dict(scan_file(resolved, surface=surface))
+        from_root = resolved.relative_to(root).as_posix()
+        for finding in out["findings"]:
+            if finding["location"] == str(resolved):
+                finding["location"] = from_root
+        return out
     if not has_content:
         got = type(content).__name__
         return _quarantine(f"Pass 'path' or 'content'. content must be a string, got {got}.")
@@ -184,6 +269,32 @@ def serve() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # The root is module state on purpose: set once here, before serve() reads a request, and
+    # read by dispatch; the tests set it directly to call dispatch in process.
+    global _ROOT, _ROOT_AS_GIVEN
+    ap = argparse.ArgumentParser(prog="skill-tripwire-server", allow_abbrev=False, add_help=False,
+                                 description="MCP stdio server exposing scan_skill_file.")
+    ap.add_argument("--root", default=None,
+                    help="the one folder a 'path' may resolve inside (default: the working "
+                         "directory at start)")
+    ns, extra = ap.parse_known_args(argv)
+    if extra:
+        # The server took no arguments before --root and ignored any; it still ignores them.
+        print("skill-tripwire-server: arguments other than --root are ignored", file=sys.stderr)
+    # An empty or blank --root names no folder (Path of an empty string reads as the start folder),
+    # and a resolve that cannot finish (a link loop) names none either: each gets the rule line,
+    # exit 2, never the value typed.
+    if ns.root is not None and not ns.root.strip():
+        ap.error("--root must name an existing folder")
+    given = ns.root if ns.root is not None else os.getcwd()
+    try:
+        root = Path(given).resolve()
+        is_folder = root.is_dir()
+    except (OSError, RuntimeError, ValueError):
+        is_folder = False
+    if not is_folder:
+        ap.error("--root must name an existing folder")
+    _ROOT, _ROOT_AS_GIVEN = root, Path(os.path.abspath(given))
     serve()
     return 0
 

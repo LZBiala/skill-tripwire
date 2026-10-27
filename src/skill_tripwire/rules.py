@@ -38,14 +38,66 @@ def _defang(s: str, limit: int = 80) -> str:
     before it leaves: control characters are removed, not shown, because a raw ESC in a
     matched span would be a terminal-escape-injection channel through the scanner's own
     output, and the same bytes handed to a calling agent are untrusted content. Newlines and
-    tabs become visible markers; every other C-category codepoint is dropped.
+    tabs become visible markers; every other C-category codepoint is dropped. A credential
+    shape is masked before the line ends become markers (so a token at the start of a line
+    keeps its word boundary) and before the cut at the limit (so no part of a secret shows).
     """
+    s = "".join(ch for ch in s if ch in _MARKED or unicodedata.category(ch) not in {"Cc", "Cf", "Co"})
+    s = _mask_credentials(s)
     s = s.replace("\n", "\\n").replace("\r", "\\r").replace("\t", " ")
-    s = "".join(ch for ch in s if unicodedata.category(ch) not in {"Cc", "Cf", "Co"})
     s = s.strip()
     if len(s) > limit:
         s = s[:limit] + "..."
     return s
+
+
+# The three control characters _defang shows as markers instead of dropping them.
+_MARKED = frozenset("\n\r\t")
+
+# Credential shapes masked inside evidence, so a scan never echoes a live secret into a CI log
+# or a calling agent's context. The class and the length stay; the characters do not. Named
+# shapes first, then any long run that looks like an opaque token (a letter, a digit, and more
+# spread than a word has). The verdict never changes: masking touches the evidence text only.
+# A named shape starts after anything but a letter or a digit, or after a two-character escape of a
+# line end or tab (raw JSON text holds those), so KEY_ in front hides nothing.
+_SHAPE_START = r"(?:(?<![A-Za-z0-9])|(?<=\\[nrt]))"
+_CREDENTIAL_SHAPES = (
+    ("anthropic-key", re.compile(r"sk-ant-[A-Za-z0-9_\-]{16,}")),
+    ("api-key", re.compile(_SHAPE_START + r"sk-[A-Za-z0-9_\-]{20,}")),
+    ("github-token", re.compile(_SHAPE_START + r"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})")),
+    ("gitlab-token", re.compile(_SHAPE_START + r"glpat-[A-Za-z0-9_\-]{20,}")),
+    ("aws-key-id", re.compile(_SHAPE_START + r"(?:AKIA|ASIA)[0-9A-Z]{16}(?![0-9A-Z])")),
+    ("slack-token", re.compile(_SHAPE_START + r"xox[abeprs]-[A-Za-z0-9\-]{10,}")),
+    ("jwt", re.compile(_SHAPE_START + r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")),
+    # Hex digits and hyphens give at most log2(17) bits a character, under the path-like floor below, so a
+    # UUID-shaped key is named here or it would always show.
+    ("uuid-token", re.compile(_SHAPE_START + r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}(?![A-Za-z0-9])")),
+    # hf_ or api_org_ then 34 ASCII letters: a letters-only run never meets the opaque rule's digit test.
+    ("huggingface-token", re.compile(_SHAPE_START + r"(?:hf_|api_org_)[A-Za-z]{34}(?![A-Za-z0-9])")),
+)
+_OPAQUE_RUN = re.compile(r"[A-Za-z0-9+/=_\-]{32,}")
+# The spread an opaque run needs, in bits a character. A run holding / or - may be a URL path or
+# a hyphenated name, whose spread sits near 4, so it needs more; a random token sits near 4.5 to 5.
+_SPREAD_FLOOR = 3.0
+_SPREAD_FLOOR_PATH_LIKE = 4.2
+
+
+def _mask(kind: str, run: str) -> str:
+    return f"[masked {kind}, {len(run)} chars]"
+
+
+def _opaque(m: re.Match[str]) -> str:
+    run = m.group(0)
+    floor = _SPREAD_FLOOR_PATH_LIKE if ("/" in run or "-" in run) else _SPREAD_FLOOR
+    looks_opaque = (any(c.isdigit() for c in run) and any(c.isalpha() for c in run)
+                    and _shannon(run) >= floor)
+    return _mask("opaque-token", run) if looks_opaque else run
+
+
+def _mask_credentials(s: str) -> str:
+    for kind, pat in _CREDENTIAL_SHAPES:
+        s = pat.sub(lambda m, kind=kind: _mask(kind, m.group(0)), s)
+    return _OPAQUE_RUN.sub(_opaque, s)
 
 
 # --------------------------------------------------------------------------- block tier
