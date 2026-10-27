@@ -109,7 +109,6 @@ def _looks_like_a_path(content: str) -> bool:
         # can reach the network redirector.
         return True
     try:
-        from pathlib import Path
         return Path(s).is_file()
     except OSError:
         return False
@@ -143,7 +142,9 @@ def _confined(path: str, root: Path, given: Path) -> Path | None:
         resolved = (typed if os.name == "nt" else Path(path)).resolve()
     except (OSError, RuntimeError, ValueError):
         return None
-    return resolved if resolved.is_relative_to(root) else None
+    # The names as the file system spells them, compared exactly: a case-blind compare through
+    # str.lower() reads U+212A KELVIN SIGN as k, while NTFS keeps the two names apart.
+    return resolved if resolved.parts[:len(root.parts)] == root.parts else None
 
 
 def dispatch(name: str, args: Any) -> dict[str, Any]:

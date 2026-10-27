@@ -109,3 +109,46 @@ def test_an_empty_or_blank_root_flag_exits_2_in_place_of_serving_the_start_folde
     code, served = _exit_of_main(["--root", str(tmp_path / "missing")], monkeypatch)
     err = capsys.readouterr().err
     assert code == 2 and served == [] and _ROOT_LINE in err and "missing" not in err, "the control still exits 2"
+
+
+# ---- W6: the root check compares the names on disk exactly, never through str.lower() ----------
+
+_BENIGN = "# Date Formatter" + NL + "Formats a date. No tools." + NL
+
+# Each pair: a root and a folder beside it whose name lower-cases onto the root name in Python
+# (U+212A KELVIN SIGN to k, U+2126 OHM SIGN to U+03C9) while NTFS keeps the two names apart.
+_LOOKALIKE_PAIRS = [
+    pytest.param("r" + chr(0x212A), "rk", id="kelvin-sign-root"),
+    pytest.param("rk", "r" + chr(0x212A), id="kelvin-sign-outside"),
+    pytest.param("r" + chr(0x2126), "r" + chr(0x03C9), id="ohm-sign-root"),
+]
+
+
+@pytest.mark.parametrize("root_name,outside_name", _LOOKALIKE_PAIRS)
+def test_a_folder_outside_the_root_whose_name_python_lower_cases_into_the_root_is_refused(
+        root_name: str, outside_name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    base = tmp_path.resolve()
+    root, outside, sibling = base / root_name, base / outside_name, base / "plain-sibling"
+    for folder in (root, outside, sibling):
+        folder.mkdir()
+    (root / "INSIDE.md").write_text(_BENIGN, encoding="utf-8")
+    (outside / "SKILL.md").write_text(_BENIGN, encoding="utf-8")
+    (sibling / "SKILL.md").write_text(_BENIGN, encoding="utf-8")
+    target = outside / "SKILL.md"
+    assert not os.path.samefile(outside, root), "two folders on disk (the precondition)"
+    assert all(str(parent) != str(root) for parent in target.parents), "the root holds no part of the outside file"
+    if os.name == "nt":
+        assert Path(outside) == Path(root), "the case-blind compare reads the two as one (the precondition)"
+    monkeypatch.setattr(server, "_ROOT", root.resolve())
+    monkeypatch.setattr(server, "_ROOT_AS_GIVEN", None)
+    monkeypatch.chdir(root)
+    for typed in (str(target), "../" + outside_name + "/SKILL.md"):
+        body = server.dispatch("scan_skill_file", {"path": typed})
+        assert [found["rule"] for found in body["findings"]] == ["path-outside-root"], (
+            "a folder outside the root was read, verdict " + body["verdict"])
+        for field in ("message", "evidence", "location"):
+            assert typed not in body["findings"][0][field] and "SKILL.md" not in body["findings"][0][field]
+    assert server.dispatch("scan_skill_file", {"path": str(root / "INSIDE.md")})["verdict"] == "PASS", (
+        "a file inside the root is still read (the guard)")
+    plain = server.dispatch("scan_skill_file", {"path": str(sibling / "SKILL.md")})
+    assert [found["rule"] for found in plain["findings"]] == ["path-outside-root"], "a plain sibling is refused (the guard)"
