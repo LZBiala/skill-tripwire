@@ -280,9 +280,18 @@ def main(argv: list[str] | None = None) -> int:
     if extra:
         # The server took no arguments before --root and ignored any; it still ignores them.
         print("skill-tripwire-server: arguments other than --root are ignored", file=sys.stderr)
+    # An empty or blank --root names no folder (Path of an empty string reads as the start folder),
+    # and a resolve that cannot finish (a link loop) names none either: each gets the rule line,
+    # exit 2, never the value typed.
+    if ns.root is not None and not ns.root.strip():
+        ap.error("--root must name an existing folder")
     given = ns.root if ns.root is not None else os.getcwd()
-    root = Path(given).resolve()
-    if not root.is_dir():
+    try:
+        root = Path(given).resolve()
+        is_folder = root.is_dir()
+    except (OSError, RuntimeError, ValueError):
+        is_folder = False
+    if not is_folder:
         ap.error("--root must name an existing folder")
     _ROOT, _ROOT_AS_GIVEN = root, Path(os.path.abspath(given))
     serve()
