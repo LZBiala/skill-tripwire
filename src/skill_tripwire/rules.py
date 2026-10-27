@@ -58,18 +58,20 @@ _MARKED = frozenset("\n\r\t")
 # or a calling agent's context. The class and the length stay; the characters do not. Named
 # shapes first, then any long run that looks like an opaque token (a letter, a digit, and more
 # spread than a word has). The verdict never changes: masking touches the evidence text only.
-# A named shape starts after anything but a letter or a digit, so KEY_ in front hides nothing.
+# A named shape starts after anything but a letter or a digit, or after a two-character escape of a
+# line end or tab (raw JSON text holds those), so KEY_ in front hides nothing.
+_SHAPE_START = r"(?:(?<![A-Za-z0-9])|(?<=\\[nrt]))"
 _CREDENTIAL_SHAPES = (
     ("anthropic-key", re.compile(r"sk-ant-[A-Za-z0-9_\-]{16,}")),
-    ("api-key", re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_\-]{20,}")),
-    ("github-token", re.compile(r"(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})")),
-    ("gitlab-token", re.compile(r"(?<![A-Za-z0-9])glpat-[A-Za-z0-9_\-]{20,}")),
-    ("aws-key-id", re.compile(r"(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![0-9A-Z])")),
-    ("slack-token", re.compile(r"(?<![A-Za-z0-9])xox[abeprs]-[A-Za-z0-9\-]{10,}")),
-    ("jwt", re.compile(r"(?<![A-Za-z0-9])eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")),
+    ("api-key", re.compile(_SHAPE_START + r"sk-[A-Za-z0-9_\-]{20,}")),
+    ("github-token", re.compile(_SHAPE_START + r"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})")),
+    ("gitlab-token", re.compile(_SHAPE_START + r"glpat-[A-Za-z0-9_\-]{20,}")),
+    ("aws-key-id", re.compile(_SHAPE_START + r"(?:AKIA|ASIA)[0-9A-Z]{16}(?![0-9A-Z])")),
+    ("slack-token", re.compile(_SHAPE_START + r"xox[abeprs]-[A-Za-z0-9\-]{10,}")),
+    ("jwt", re.compile(_SHAPE_START + r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")),
     # Hex digits and hyphens give at most log2(17) bits a character, under the path-like floor below, so a
     # UUID-shaped key is named here or it would always show.
-    ("uuid-token", re.compile(r"(?<![A-Za-z0-9])[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}(?![A-Za-z0-9])")),
+    ("uuid-token", re.compile(_SHAPE_START + r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}(?![A-Za-z0-9])")),
 )
 _OPAQUE_RUN = re.compile(r"[A-Za-z0-9+/=_\-]{32,}")
 # The spread an opaque run needs, in bits a character. A run holding / or - may be a URL path or
