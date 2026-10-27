@@ -88,7 +88,8 @@ def _unc_or_device(s: str) -> bool:
     characters are each a slash or a backslash, or the first four, each slash read as a
     backslash, are the NT prefix (a backslash, two question marks and a backslash). Windows
     passes a string with the NT prefix to the NT namespace unchanged, so a stat of either
-    spelling can open a network share."""
+    spelling can reach the network redirector, which may send the caller's credentials to the
+    named host."""
     if os.name != "nt":
         return False
     head = s[:4].replace("/", "\\")
@@ -105,7 +106,7 @@ def _looks_like_a_path(content: str) -> bool:
     if _unc_or_device(s):
         # A UNC or device spelling (two leading slashes or backslashes, or the NT prefix: a
         # backslash, two question marks and a backslash) is never stat-ed: on Windows the stat
-        # would open a network share.
+        # can reach the network redirector.
         return True
     try:
         from pathlib import Path

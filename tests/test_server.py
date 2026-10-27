@@ -310,7 +310,7 @@ def test_a_unc_string_passed_as_content_reads_review_with_no_file_system_call() 
     from skill_tripwire import server
 
     if os.name != "nt":
-        pytest.skip("a UNC string opens a network share only on Windows")
+        pytest.skip("a UNC string can reach the network redirector only on Windows")
     calls: list[str] = []
 
     def recording_is_file(self: Path) -> bool:
