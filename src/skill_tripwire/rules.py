@@ -72,6 +72,8 @@ _CREDENTIAL_SHAPES = (
     # Hex digits and hyphens give at most log2(17) bits a character, under the path-like floor below, so a
     # UUID-shaped key is named here or it would always show.
     ("uuid-token", re.compile(_SHAPE_START + r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}(?![A-Za-z0-9])")),
+    # hf_ or api_org_ then 34 ASCII letters: a letters-only run never meets the opaque rule's digit test.
+    ("huggingface-token", re.compile(_SHAPE_START + r"(?:hf_|api_org_)[A-Za-z]{34}(?![A-Za-z0-9])")),
 )
 _OPAQUE_RUN = re.compile(r"[A-Za-z0-9+/=_\-]{32,}")
 # The spread an opaque run needs, in bits a character. A run holding / or - may be a URL path or
